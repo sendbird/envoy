@@ -23,6 +23,8 @@ set -e
 # Workaround for https://github.com/envoyproxy/envoy/issues/26634
 DOCKER_BUILD_TIMEOUT="${DOCKER_BUILD_TIMEOUT:-400}"
 
+DOCKERHUB_REGISTRY="${DOCKERHUB_REGISTRY:-docker.io}"
+
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64,linux/amd64}"
 
 function is_windows() {
@@ -378,7 +380,7 @@ build_and_maybe_push_image_and_variants () {
 login_docker () {
     echo ">> LOGIN"
     if [[ -z "$DOCKER_CI_DRYRUN" ]]; then
-       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD"
+       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD" "$DOCKER_REGISTRY"
     fi
 }
 

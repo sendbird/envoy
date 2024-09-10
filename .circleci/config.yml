@@ -1,8 +1,69 @@
 version: 2.1
 
+orbs:
+  aws-ecr: circleci/aws-ecr@8.1.3
+  aws-cli: circleci/aws-cli@2.0.6
+
+workflows:
+  build:
+    jobs:
+      - build:
+          filters:
+            tags:
+              only:
+                - /^v.*/
+            branches:
+              ignore:
+                - /.*/
+          context: circleci-soda-bot
+
 jobs:
   build:
-    docker:
-    - image: debian:bullseye-slim@sha256:d3d0d14f49b49a4dd98a436711f5646dc39e1c99203ef223d1b6620061e2c0e5
+    machine:
+      image: ubuntu-2204:current
     steps:
-    - run: echo "no circle on this branch"
+      - checkout
+      - aws-cli/setup:
+          aws-access-key-id: AWS_ACCESS_KEY_ID
+          aws-secret-access-key: AWS_SECRET_ACCESS_KEY
+          profile-name: default
+          configure-default-region: false
+
+      - run:
+          name: Set environment
+          command: |
+            echo 'export AWS_REGION=us-east-1' >> $BASH_ENV
+            echo 'export AWS_ROLE_ARN="$AWS_ROLE_CI_OPS"' >> $BASH_ENV
+            echo "export ECR_ACCOUNT_NUM=$(echo $AWS_ROLE_CI_OPS | grep -Eo '[0-9]{12}')" >> $BASH_ENV
+            echo 'export ECR_HOST=${ECR_ACCOUNT_NUM}.dkr.ecr.${AWS_REGION}.amazonaws.com' >> $BASH_ENV
+
+      - run:
+          name: Set AWS credentials
+          command: |
+            mkdir -p ~/.aws
+            echo '
+            [profile circleci]
+            source_profile=default
+            role_arn='"$AWS_ROLE_CI_OPS"'
+            ' >> ~/.aws/config
+
+      - run:
+          name: Set envoy build environment
+          command: |
+            export VERSION=$(echo $CIRCLE_TAG | sed 's/v//')
+            echo "export DOCKER_IMAGE_PREFIX=mesg/envoy" >> $BASH_ENV
+            echo "export DOCKER_REGISTRY=${ECR_HOST}" >> $BASH_ENV
+            echo "export DOCKERHUB_USERNAME=AWS" >> $BASH_ENV
+            echo "export CI_BRANCH=refs/heads/release/v${VERSION}" >> $BASH_ENV
+            echo "export CI_SHA1=${CIRCLE_SHA1}" >> $BASH_ENV
+            echo "export ENVOY_DOCKER_IN_DOCKER=1" >> $BASH_ENV
+            cat $BASH_ENV
+            echo "export DOCKERHUB_PASSWORD=$(aws ecr get-login-password --region us-east-1 --profile circleci)" >> $BASH_ENV
+
+      - run:
+          name: Building envoy
+          command: ./ci/run_envoy_docker.sh 'ci/do_ci.sh release.server_only'
+
+      - run:
+          name: Build docker image
+          command: ./ci/run_envoy_docker.sh 'ci/do_ci.sh docker'

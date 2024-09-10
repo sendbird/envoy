@@ -130,6 +130,8 @@ docker run --rm \
        -e CI_BRANCH \
        -e CI_SHA1 \
        -e CI_TARGET_BRANCH \
+       -e DOCKER_IMAGE_PREFIX \
+       -e DOCKER_REGISTRY \
        -e DOCKERHUB_USERNAME \
        -e DOCKERHUB_PASSWORD \
        -e ENVOY_DOCKER_SAVE_IMAGE \
