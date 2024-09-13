@@ -23,6 +23,8 @@ set -e
 # Workaround for https://github.com/envoyproxy/envoy/issues/26634
 DOCKER_BUILD_TIMEOUT="${DOCKER_BUILD_TIMEOUT:-500}"
 
+DOCKERHUB_REGISTRY="${DOCKERHUB_REGISTRY:-docker.io}"
+
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64,linux/amd64}"
 
 if [[ -n "$DOCKER_CI_DRYRUN" ]]; then
@@ -93,6 +95,14 @@ config_env() {
 
 # "-google-vrp" must come afer "" to ensure we rebuild the local base image dependency.
 BUILD_TYPES=("" "-debug" "-contrib" "-contrib-debug" "-distroless" "-google-vrp" "-tools")
+||||||| parent of c77f0a9946 (Setup CI)
+if is_windows; then
+    BUILD_TYPES=("-${WINDOWS_BUILD_TYPE}")
+    # BuildKit is not available for Windows images, use standard build command
+    BUILD_COMMAND=("build")
+else
+    # "-google-vrp" must come afer "" to ensure we rebuild the local base image dependency.
+    BUILD_TYPES=("" "-debug" "-contrib" "-contrib-debug" "-distroless" "-google-vrp" "-tools")
 
 # Configure docker-buildx tools
 BUILD_COMMAND=("buildx" "build")
@@ -332,7 +342,7 @@ build_and_maybe_push_image_and_variants () {
 login_docker () {
     echo ">> LOGIN"
     if [[ -z "$DOCKER_CI_DRYRUN" ]]; then
-       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD"
+       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD" "$DOCKER_REGISTRY"
     fi
 }
 
