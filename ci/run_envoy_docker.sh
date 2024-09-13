@@ -136,10 +136,13 @@ docker run --rm \
        -e CI_BRANCH \
        -e CI_SHA1 \
        -e CI_TARGET_BRANCH \
+       -e DOCKER_IMAGE_PREFIX \
+       -e DOCKER_REGISTRY \
        -e DOCKERHUB_USERNAME \
        -e DOCKERHUB_PASSWORD \
        -e ENVOY_DOCKER_SAVE_IMAGE \
        -e ENVOY_STDLIB \
+       -e ENVOY_VERSION \
        -e BUILD_REASON \
        -e BAZEL_REMOTE_INSTANCE \
        -e GCP_SERVICE_ACCOUNT_KEY \
