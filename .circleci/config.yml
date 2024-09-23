@@ -16,11 +16,37 @@ workflows:
               ignore:
                 - /.*/
           context: circleci-soda-bot
+          machine-type: arm64
+      - build:
+          filters:
+            tags:
+              only:
+                - /^v.*/
+            branches:
+              ignore:
+                - /.*/
+          context: circleci-soda-bot
+          machine-type: amd64
+      
+
+executors:
+  arm64:
+    machine:
+      resource_class: arm.2xlarge
+      image: ubuntu-2204:current
+  amd64:
+    machine:
+      resource_class: 2xlarge
+      image: ubuntu-2204:current
+
 
 jobs:
   build:
-    machine:
-      image: ubuntu-2204:current
+    parameters:
+      machine-type:
+        type: executor
+    executor: << parameters.machine-type >>
+
     steps:
       - checkout
       - aws-cli/setup:
