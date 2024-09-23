@@ -30,6 +30,13 @@ workflows:
           context: circleci-soda-bot
           machine-type: amd64
       - upload_docker:
+          filters:
+            tags:
+              only:
+                - /^v.*/
+            branches:
+              ignore:
+                - /.*/
           context: circleci-soda-bot
           requires:
             - build_arm64
