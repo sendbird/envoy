@@ -15,8 +15,8 @@ namespace OpenTelemetry {
 
 class OpenTelemetryConstantValues {
 public:
-  const Tracing::TraceContextHandler TRACE_PARENT{"traceparent"};
-  const Tracing::TraceContextHandler TRACE_STATE{"tracestate"};
+  const Tracing::TraceContextHandler TRACE_PARENT{"x-sendbird-traceparent"};
+  const Tracing::TraceContextHandler TRACE_STATE{"x-sendbird-tracestate"};
 };
 
 using OpenTelemetryConstants = ConstSingleton<OpenTelemetryConstantValues>;
