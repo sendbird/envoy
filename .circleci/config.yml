@@ -41,7 +41,7 @@ workflows:
           requires:
             - build_arm64
             - build_x64
-      
+
 
 executors:
   arm64:
