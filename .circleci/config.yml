@@ -41,7 +41,7 @@ workflows:
           requires:
             - build_arm64
             - build_x64
-      
+
 
 executors:
   arm64:
@@ -161,7 +161,7 @@ jobs:
       - run:
           name: Building envoy
           command: |
-            ./ci/run_envoy_docker.sh 'ci/do_ci.sh release.server_only'
+            ./ci/run_envoy_docker.sh 'ci/do_ci.sh release test/extensions/tracers/opentelemetry'
             mkdir release_archive
             ARCH=$(uname -m)
             if [[ ${ARCH} == "x86_64" ]]; then
