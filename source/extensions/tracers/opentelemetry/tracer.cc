@@ -26,11 +26,11 @@ using opentelemetry::proto::collector::trace::v1::ExportTraceServiceRequest;
 namespace {
 
 const Tracing::TraceContextHandler& traceParentHeader() {
-  CONSTRUCT_ON_FIRST_USE(Tracing::TraceContextHandler, "traceparent");
+  CONSTRUCT_ON_FIRST_USE(Tracing::TraceContextHandler, "x-sendbird-traceparent");
 }
 
 const Tracing::TraceContextHandler& traceStateHeader() {
-  CONSTRUCT_ON_FIRST_USE(Tracing::TraceContextHandler, "tracestate");
+  CONSTRUCT_ON_FIRST_USE(Tracing::TraceContextHandler, "x-sendbird-tracestate");
 }
 
 void callSampler(SamplerSharedPtr sampler, const absl::optional<SpanContext> span_context,

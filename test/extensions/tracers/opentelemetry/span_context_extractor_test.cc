@@ -23,7 +23,7 @@ constexpr absl::string_view trace_flags = "01";
 
 TEST(SpanContextExtractorTest, ExtractSpanContext) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
+      {"x-sendbird-traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
 
   SpanContextExtractor span_context_extractor(request_headers);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
@@ -38,7 +38,7 @@ TEST(SpanContextExtractorTest, ExtractSpanContext) {
 TEST(SpanContextExtractorTest, ExtractSpanContextNotSampled) {
   const std::string trace_flags_unsampled{"00"};
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent",
+      {"x-sendbird-traceparent",
        fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags_unsampled)}};
   SpanContextExtractor span_context_extractor(request_headers);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
@@ -62,7 +62,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithoutHeader) {
 
 TEST(SpanContextExtractorTest, ThrowsExceptionWithTooLongHeader) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("000{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
+      {"x-sendbird-traceparent", fmt::format("000{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
@@ -73,7 +73,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithTooLongHeader) {
 
 TEST(SpanContextExtractorTest, ThrowsExceptionWithTooShortHeader) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("{}-{}-{}", trace_id, parent_id, trace_flags)}};
+      {"x-sendbird-traceparent", fmt::format("{}-{}-{}", trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
@@ -84,7 +84,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithTooShortHeader) {
 
 TEST(SpanContextExtractorTest, ThrowsExceptionWithInvalidHyphenation) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("{}{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
+      {"x-sendbird-traceparent", fmt::format("{}{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
@@ -97,7 +97,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithInvalidSizes) {
   const std::string invalid_version{"0"};
   const std::string invalid_trace_flags{"001"};
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent",
+      {"x-sendbird-traceparent",
        fmt::format("{}-{}-{}-{}", invalid_version, trace_id, parent_id, invalid_trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
@@ -110,7 +110,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithInvalidSizes) {
 TEST(SpanContextExtractorTest, ThrowsExceptionWithInvalidHex) {
   const std::string invalid_version{"ZZ"};
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent",
+      {"x-sendbird-traceparent",
        fmt::format("{}-{}-{}-{}", invalid_version, trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
@@ -123,7 +123,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithInvalidHex) {
 TEST(SpanContextExtractorTest, ThrowsExceptionWithAllZeroTraceId) {
   const std::string invalid_trace_id{"00000000000000000000000000000000"};
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent",
+      {"x-sendbird-traceparent",
        fmt::format("{}-{}-{}-{}", version, invalid_trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
@@ -136,7 +136,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithAllZeroTraceId) {
 TEST(SpanContextExtractorTest, ThrowsExceptionWithAllZeroParentId) {
   const std::string invalid_parent_id{"0000000000000000"};
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent",
+      {"x-sendbird-traceparent",
        fmt::format("{}-{}-{}-{}", version, trace_id, invalid_parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
 
@@ -148,7 +148,7 @@ TEST(SpanContextExtractorTest, ThrowsExceptionWithAllZeroParentId) {
 
 TEST(SpanContextExtractorTest, ExtractSpanContextWithEmptyTracestate) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
+      {"x-sendbird-traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)}};
   SpanContextExtractor span_context_extractor(request_headers);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
 
@@ -158,8 +158,8 @@ TEST(SpanContextExtractorTest, ExtractSpanContextWithEmptyTracestate) {
 
 TEST(SpanContextExtractorTest, ExtractSpanContextWithTracestate) {
   Tracing::TestTraceContextImpl request_headers{
-      {"traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)},
-      {"tracestate", "sample-tracestate"}};
+      {"x-sendbird-traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)},
+      {"x-sendbird-tracestate", "sample-tracestate"}};
   SpanContextExtractor span_context_extractor(request_headers);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
 
@@ -168,7 +168,7 @@ TEST(SpanContextExtractorTest, ExtractSpanContextWithTracestate) {
 }
 
 TEST(SpanContextExtractorTest, IgnoreTracestateWithoutTraceparent) {
-  Tracing::TestTraceContextImpl request_headers{{"tracestate", "sample-tracestate"}};
+  Tracing::TestTraceContextImpl request_headers{{"x-sendbird-tracestate", "sample-tracestate"}};
   SpanContextExtractor span_context_extractor(request_headers);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
 
@@ -178,9 +178,9 @@ TEST(SpanContextExtractorTest, IgnoreTracestateWithoutTraceparent) {
 
 TEST(SpanContextExtractorTest, ExtractSpanContextWithMultipleTracestateEntries) {
   Http::TestRequestHeaderMapImpl request_headers{
-      {"traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)},
-      {"tracestate", "sample-tracestate"},
-      {"tracestate", "sample-tracestate-2"}};
+      {"x-sendbird-traceparent", fmt::format("{}-{}-{}-{}", version, trace_id, parent_id, trace_flags)},
+      {"x-sendbird-tracestate", "sample-tracestate"},
+      {"x-sendbird-tracestate", "sample-tracestate-2"}};
   Tracing::HttpTraceContext trace_context(request_headers);
   SpanContextExtractor span_context_extractor(trace_context);
   absl::StatusOr<SpanContext> span_context = span_context_extractor.extractSpanContext();
