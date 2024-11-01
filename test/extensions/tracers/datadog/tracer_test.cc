@@ -347,13 +347,13 @@ TEST_F(DatadogTracerTest, EnvoySamplingVersusExtractedSampling) {
       if (test_case.extracted_sampling_priority) {
         const int priority = *test_case.extracted_sampling_priority;
         flags = priority <= 0 ? "00" : "01";
-        context.context_map_["tracestate"] = "dd=s:" + std::to_string(priority);
+        context.context_map_["x-sendbird-tracestate"] = "dd=s:" + std::to_string(priority);
       } else {
         // There's no such thing as the absence of a sampling decision with
         // "traceparent," so default to "drop."
         flags = "00";
       }
-      context.context_map_["traceparent"] =
+      context.context_map_["x-sendbird-traceparent"] =
           "00-0000000000000000000000000000007b-00000000000001c8-" + flags;
     }
 
