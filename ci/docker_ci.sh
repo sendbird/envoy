@@ -23,8 +23,6 @@ set -e
 # Workaround for https://github.com/envoyproxy/envoy/issues/26634
 DOCKER_BUILD_TIMEOUT="${DOCKER_BUILD_TIMEOUT:-500}"
 
-DOCKERHUB_REGISTRY="${DOCKERHUB_REGISTRY:-docker.io}"
-
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64,linux/amd64}"
 
 function is_windows() {
@@ -109,7 +107,7 @@ if is_windows; then
     BUILD_COMMAND=("build")
 else
     # "-google-vrp" must come afer "" to ensure we rebuild the local base image dependency.
-    BUILD_TYPES=("")
+    BUILD_TYPES=("" "-debug" "-contrib" "-contrib-debug" "-distroless" "-google-vrp" "-tools")
 
     # Configure docker-buildx tools
     BUILD_COMMAND=("buildx" "build")
@@ -380,7 +378,7 @@ build_and_maybe_push_image_and_variants () {
 login_docker () {
     echo ">> LOGIN"
     if [[ -z "$DOCKER_CI_DRYRUN" ]]; then
-       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD" "$DOCKER_REGISTRY"
+       docker login -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_PASSWORD"
     fi
 }
 
