@@ -285,7 +285,14 @@ void RedisCluster::RedisDiscoverySession::registerDiscoveryAddress(
 }
 
 void RedisCluster::RedisDiscoverySession::startResolveRedis() {
+  // Check if parent_ or parent_->info_ is null before proceeding
+  if (!parent_.info_) {
+    ENVOY_LOG(error, "parent_->info_ is null in startResolveRedis");
+    return;  // Early return if either is null to prevent crashes
+  }
+
   parent_.info_->configUpdateStats().update_attempt_.inc();
+
   // If a resolution is currently in progress, skip it.
   if (current_request_) {
     ENVOY_LOG(debug, "redis cluster slot request is already in progress for '{}'",
@@ -293,31 +300,69 @@ void RedisCluster::RedisDiscoverySession::startResolveRedis() {
     return;
   }
 
-  // If hosts is empty, we haven't received a successful result from the CLUSTER SLOTS call
-  // yet. So, pick a random discovery address from dns and make a request.
+  // If hosts is empty, we haven't received a successful result from the CLUSTER SLOTS call yet.
+  // So, pick a random discovery address from DNS and make a request.
   Upstream::HostSharedPtr host;
   if (parent_.hosts_.empty()) {
+    ENVOY_LOG(debug, "Hosts are empty, selecting random address from discovery list.");
     const int rand_idx = parent_.random_.random() % discovery_address_list_.size();
     auto it = std::next(discovery_address_list_.begin(), rand_idx);
+    
     host = Upstream::HostSharedPtr{
         new RedisHost(parent_.info(), "", *it, parent_, true, parent_.timeSource())};
   } else {
+    ENVOY_LOG(error, "Hosts are not empty, selecting random host from available hosts.");
+    if (!parent_.info_ || parent_.hosts_.empty()) {
+      ENVOY_LOG(error, "Invalid parent or empty hosts in startResolveRedis");
+      return;
+    }
+    if (discovery_address_list_.empty()) {
+      ENVOY_LOG(error, "Discovery address list is empty.");
+      return;
+    }
+    ENVOY_LOG(debug, "Attempting to select a random host, size of list: {}", parent_.hosts_.size());
     const int rand_idx = parent_.random_.random() % parent_.hosts_.size();
+    if (rand_idx < 0) {
+      ENVOY_LOG(error, "Random index out of bounds.");
+      return;
+    }
     host = parent_.hosts_[rand_idx];
   }
 
+  if (!host) {
+    ENVOY_LOG(error, "Host is null in startResolveRedis!");
+    return;
+  }
+
+  ENVOY_LOG(debug, "here again");
+
+  // Log the chosen host address
   current_host_address_ = host->address()->asString();
+  ENVOY_LOG(debug, "Chosen host address: {}", current_host_address_);
+
+  // Look up or create a RedisDiscoveryClient for the chosen host address
   RedisDiscoveryClientPtr& client = client_map_[current_host_address_];
   if (!client) {
+    ENVOY_LOG(debug, "Creating new RedisDiscoveryClient for host '{}'", current_host_address_);
     client = std::make_unique<RedisDiscoveryClient>(*this);
     client->host_ = current_host_address_;
+    
+    // Create and configure the client
     client->client_ = client_factory_.create(host, dispatcher_, shared_from_this(),
                                              redis_command_stats_, parent_.info()->statsScope(),
                                              parent_.auth_username_, parent_.auth_password_, false);
+    ENVOY_LOG(debug, "RedisDiscoveryClient created, setting connection callbacks.");
     client->client_->addConnectionCallbacks(*client);
+  } else {
+    ENVOY_LOG(debug, "Reusing existing RedisDiscoveryClient for host '{}'", current_host_address_);
   }
-  ENVOY_LOG(debug, "executing redis cluster slot request for '{}'", parent_.info_->name());
+
+  // Log the actual request execution
+  ENVOY_LOG(debug, "Executing redis cluster slot request for '{}'", parent_.info_->name());
+
+  // Make the request
   current_request_ = client->client_->makeRequest(ClusterSlotsRequest::instance_, *this);
+  ENVOY_LOG(debug, "Redis cluster slot request initiated for host '{}'", current_host_address_);
 }
 
 void RedisCluster::RedisDiscoverySession::updateDnsStats(
