@@ -1,3 +1,7 @@
+#include <unistd.h>
+
+#include <cstdlib>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,6 +17,7 @@
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/server/server_factory_context.h"
 #include "test/mocks/ssl/mocks.h"
+#include "test/test_common/network_utility.h"
 #include "test/test_common/test_runtime.h"
 
 #include "gmock/gmock.h"
@@ -346,6 +351,177 @@ TEST_F(EnvoyQuicProofSourceTest, ComputeSignatureFailNoFilterChain) {
   proof_source_.ComputeTlsSignature(
       server_address_, client_address_, hostname_, SSL_SIGN_RSA_PSS_RSAE_SHA256, "payload",
       std::make_unique<TestSignatureCallback>(false, filter_chain_, signature));
+}
+
+// Test keylog functionality
+TEST_F(EnvoyQuicProofSourceTest, TestKeylogFunctionality) {
+  // Test that OnNewSslCtx sets up keylog callback correctly
+  bssl::UniquePtr<SSL_CTX> ssl_ctx(SSL_CTX_new(TLS_method()));
+  ASSERT_NE(ssl_ctx, nullptr);
+
+  // Call OnNewSslCtx which should set up the keylog callback
+  proof_source_.OnNewSslCtx(ssl_ctx.get());
+
+  // Verify that the proof source was stored in SSL_CTX app data
+  void* app_data = SSL_CTX_get_app_data(ssl_ctx.get());
+  EXPECT_EQ(app_data, static_cast<void*>(&proof_source_));
+
+  // Verify that keylog callback was set
+  void (*callback)(const SSL*, const char*) = SSL_CTX_get_keylog_callback(ssl_ctx.get());
+  EXPECT_NE(callback, nullptr);
+}
+
+// Test keylog callback registration
+TEST_F(EnvoyQuicProofSourceTest, TestKeylogCallbackRegistration) {
+  // Create SSL_CTX and setup keylog
+  bssl::UniquePtr<SSL_CTX> ssl_ctx(SSL_CTX_new(TLS_method()));
+  proof_source_.OnNewSslCtx(ssl_ctx.get());
+
+  // Verify that keylog callback is registered
+  void (*callback)(const SSL*, const char*) = SSL_CTX_get_keylog_callback(ssl_ctx.get());
+  EXPECT_NE(callback, nullptr);
+
+  // Verify that app data points to our proof source
+  void* app_data = SSL_CTX_get_app_data(ssl_ctx.get());
+  EXPECT_EQ(app_data, static_cast<void*>(&proof_source_));
+}
+
+// Test keylog file writing with environment variable
+TEST_F(EnvoyQuicProofSourceTest, TestKeylogFileWriting) {
+  // Create a temporary file for keylog output
+  std::string temp_file = "/tmp/test_keylog_" + std::to_string(getpid()) + ".txt";
+
+  // Set SSLKEYLOGFILE environment variable
+  setenv("SSLKEYLOGFILE", temp_file.c_str(), 1);
+
+  // Create SSL_CTX and setup keylog
+  bssl::UniquePtr<SSL_CTX> ssl_ctx(SSL_CTX_new(TLS_method()));
+  proof_source_.OnNewSslCtx(ssl_ctx.get());
+
+  // Create SSL connection
+  bssl::UniquePtr<SSL> ssl(SSL_new(ssl_ctx.get()));
+
+  // Get the keylog callback and call it to test functionality
+  void (*callback)(const SSL*, const char*) = SSL_CTX_get_keylog_callback(ssl_ctx.get());
+  ASSERT_NE(callback, nullptr);
+
+  // Call the callback with test data
+  const char* test_line = "CLIENT_RANDOM 0123456789abcdef test_key_material";
+  callback(ssl.get(), test_line);
+
+  // Verify the keylog was written to file
+  std::ifstream keylog_file(temp_file);
+  ASSERT_TRUE(keylog_file.is_open());
+  std::string line;
+  ASSERT_TRUE(std::getline(keylog_file, line));
+  EXPECT_EQ(line, test_line);
+  keylog_file.close();
+
+  // Clean up
+  unlink(temp_file.c_str());
+  unsetenv("SSLKEYLOGFILE");
+}
+
+// Test keylog callback without environment variable
+TEST_F(EnvoyQuicProofSourceTest, TestKeylogCallbackWithoutEnvironmentVariable) {
+  // Ensure SSLKEYLOGFILE is not set
+  unsetenv("SSLKEYLOGFILE");
+
+  // Create SSL_CTX and setup keylog
+  bssl::UniquePtr<SSL_CTX> ssl_ctx(SSL_CTX_new(TLS_method()));
+  proof_source_.OnNewSslCtx(ssl_ctx.get());
+
+  // Verify that keylog callback is still registered (even without env var)
+  void (*callback)(const SSL*, const char*) = SSL_CTX_get_keylog_callback(ssl_ctx.get());
+  EXPECT_NE(callback, nullptr);
+
+  // Create SSL connection and test that callback doesn't crash without env var
+  bssl::UniquePtr<SSL> ssl(SSL_new(ssl_ctx.get()));
+
+  // Call the callback - it should not crash even without SSLKEYLOGFILE set
+  const char* test_line = "CLIENT_RANDOM 0123456789abcdef test_key_material";
+  EXPECT_NO_THROW(callback(ssl.get(), test_line));
+}
+
+// Test QUIC keylog bridge functionality
+TEST_F(EnvoyQuicProofSourceTest, TestQuicKeylogBridge) {
+  // Create a mock context config with keylog configuration
+  NiceMock<Ssl::MockServerContextConfig> mock_config;
+  NiceMock<AccessLog::MockAccessLogManager> mock_access_log_manager;
+  auto mock_access_log_file = std::make_shared<NiceMock<AccessLog::MockAccessLogFile>>();
+  
+  std::string keylog_path = "/tmp/test_bridge_keylog_" + std::to_string(getpid()) + ".txt";
+  
+  // Setup mock expectations
+  EXPECT_CALL(mock_config, tlsKeyLogPath())
+      .WillRepeatedly(ReturnRef(keylog_path));
+  
+  Network::Address::IpList empty_ip_list;
+  EXPECT_CALL(mock_config, tlsKeyLogLocal())
+      .WillRepeatedly(ReturnRef(empty_ip_list));
+  EXPECT_CALL(mock_config, tlsKeyLogRemote())
+      .WillRepeatedly(ReturnRef(empty_ip_list));
+  
+  EXPECT_CALL(mock_config, accessLogManager())
+      .WillRepeatedly(ReturnRef(mock_access_log_manager));
+  
+  EXPECT_CALL(mock_access_log_manager, createAccessLog(_))
+      .WillOnce(Return(absl::StatusOr<AccessLog::AccessLogFileSharedPtr>(mock_access_log_file)));
+  
+  EXPECT_CALL(*mock_access_log_file, write(_))
+      .Times(1);
+
+  // Create test addresses
+  auto local_addr = Network::Test::getCanonicalLoopbackAddress(Network::Address::IpVersion::v4);
+  auto remote_addr = Network::Test::getCanonicalLoopbackAddress(Network::Address::IpVersion::v4);
+  
+  // Test the bridge functionality
+  const char* test_line = "CLIENT_RANDOM 123456789 ABCDEF";
+  EnvoyQuicProofSource::QuicKeylogBridge::writeKeylog(mock_config, *local_addr, *remote_addr, test_line);
+}
+
+// Test the complete keylog callback flow including SSL context setup
+TEST_F(EnvoyQuicProofSourceTest, TestKeylogCallbackWithSslContext) {
+  // Create an SSL context to test the callback registration
+  bssl::UniquePtr<SSL_CTX> ssl_ctx(SSL_CTX_new(TLS_method()));
+  ASSERT_NE(ssl_ctx, nullptr);
+
+  // Use OnNewSslCtx which calls setupQuicKeylogCallback internally
+  proof_source_.OnNewSslCtx(ssl_ctx.get());
+
+  // Create an SSL connection
+  bssl::UniquePtr<SSL> ssl(SSL_new(ssl_ctx.get()));
+  ASSERT_NE(ssl, nullptr);
+
+  // Verify that the keylog callback is set
+  auto callback = SSL_CTX_get_keylog_callback(ssl_ctx.get());
+  EXPECT_NE(callback, nullptr);
+
+  // Verify that the proof source is stored as app data
+  auto stored_proof_source = SSL_CTX_get_app_data(ssl_ctx.get());
+  EXPECT_EQ(stored_proof_source, &proof_source_);
+
+  // Test calling the callback - it should handle the case where transport socket callbacks are not available
+  const char* test_line = "CLIENT_RANDOM 0123456789abcdef test_key_material";
+  
+  // Set up environment variable for fallback test
+  std::string keylog_path = "/tmp/test_callback_keylog_" + std::to_string(getpid()) + ".txt";
+  setenv("SSLKEYLOGFILE", keylog_path.c_str(), 1);
+  
+  EXPECT_NO_THROW(callback(ssl.get(), test_line));
+
+  // Check that the keylog was written via environment variable fallback
+  std::ifstream keylog_file(keylog_path);
+  EXPECT_TRUE(keylog_file.good());
+  if (keylog_file.good()) {
+    std::string line;
+    std::getline(keylog_file, line);
+    EXPECT_EQ(line, test_line);
+  }
+
+  // Clean up
+  unsetenv("SSLKEYLOGFILE");
+  unlink(keylog_path.c_str());
 }
 
 } // namespace Quic
