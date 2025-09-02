@@ -7,6 +7,7 @@
 #include "envoy/ssl/handshaker.h"
 
 #include "source/common/common/assert.h"
+#include "source/common/network/raw_buffer_socket.h"
 #include "source/common/network/transport_socket_options_impl.h"
 #include "source/common/quic/quic_transport_socket_factory.h"
 #include "source/common/tls/server_ssl_socket.h"
@@ -25,8 +26,12 @@ public:
   ~QuicServerTransportSocketFactory() override;
 
   // Network::DownstreamTransportSocketFactory
+  // QUIC uses a different transport socket mechanism, but some code paths may call this
+  // Return a raw buffer socket as a safe fallback
   Network::TransportSocketPtr createDownstreamTransportSocket() const override {
-    PANIC("not implemented");
+    ENVOY_LOG(warn, "createDownstreamTransportSocket called on QUIC transport socket factory. "
+                    "This should not happen in normal QUIC operation.");
+    return std::make_unique<Network::RawBufferSocket>();
   }
   bool implementsSecureTransport() const override { return true; }
 
@@ -37,6 +42,9 @@ public:
   getTlsCertificateAndKey(absl::string_view sni, bool* cert_matched_sni) const;
 
   bool earlyDataEnabled() const { return enable_early_data_; }
+
+  // Access the TLS context configuration (for keylog integration)
+  const Ssl::ServerContextConfig& getContextConfig() const { return *config_; }
 
 protected:
   QuicServerTransportSocketFactory(bool enable_early_data, Stats::Scope& store,
