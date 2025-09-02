@@ -552,6 +552,7 @@ envoy_cc_library(
         "//envoy/server:transport_socket_config_interface",
         "//envoy/ssl:context_config_interface",
         "//source/common/common:assert_lib",
+        "//source/common/network:raw_buffer_socket_lib",
         "//source/common/network:transport_socket_options_lib",
         "//source/common/tls:server_context_config_lib",
         "//source/common/tls:server_context_lib",
