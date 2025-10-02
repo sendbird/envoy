@@ -223,6 +223,9 @@ private:
 
     ~RedisDiscoverySession() override;
 
+    // Initialize timer - must be called after construction since it uses shared_from_this()
+    void initialize();
+
     void registerDiscoveryAddress(std::list<Network::DnsResponse>&& response, const uint32_t port);
 
     // Start discovery against a random host from existing hosts

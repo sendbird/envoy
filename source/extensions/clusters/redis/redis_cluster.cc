@@ -105,6 +105,9 @@ RedisCluster::RedisCluster(
           session->resolve_timer_->enableTimer(std::chrono::milliseconds(0));
         }
       });
+
+  // Initialize the session after construction is complete so it can use shared_from_this()
+  redis_discovery_session_->initialize();
 }
 
 RedisCluster::~RedisCluster() {
@@ -301,17 +304,23 @@ RedisCluster::RedisDiscoverySession::RedisDiscoverySession(
     Envoy::Extensions::Clusters::Redis::RedisCluster& parent,
     NetworkFilters::Common::Redis::Client::ClientFactory& client_factory)
     : parent_(parent), dispatcher_(parent.dispatcher_),
-      resolve_timer_(parent.dispatcher_.createTimer([this]() -> void {
-        // Check if the parent cluster is being destroyed
-        if (parent_.is_destroying_.load(std::memory_order_acquire)) {
-          return;
-        }
-        startResolveRedis();
-      })),
+      resolve_timer_(nullptr),
       client_factory_(client_factory), buffer_timeout_(0),
       redis_command_stats_(
           NetworkFilters::Common::Redis::RedisCommandStats::createRedisCommandStats(
               parent_.info()->statsScope().symbolTable())) {}
+
+void RedisCluster::RedisDiscoverySession::initialize() {
+  // Create timer with shared_from_this() to keep session alive during callbacks
+  auto self = shared_from_this();
+  resolve_timer_ = dispatcher_.createTimer([self]() -> void {
+    // Check if the parent cluster is being destroyed
+    if (self->parent_.is_destroying_.load(std::memory_order_acquire)) {
+      return;
+    }
+    self->startResolveRedis();
+  });
+}
 
 // Convert the cluster slot IP/Port response to an address, return null if the response
 // does not match the expected type.
