@@ -197,7 +197,7 @@ new_features:
     avoid stampedes of DNS requests. This field sets the upper bound (exclusive) for the random amount.
 - area: redis
   change: |
-    Added support for publish.
+    Added support for publish, subscribe, spublish, ssubscribe, sunsubscribe.
 - area: jwt_authn
   change: |
     Added missing implementation to jwt_authn matchers to allow glob pattern matching.

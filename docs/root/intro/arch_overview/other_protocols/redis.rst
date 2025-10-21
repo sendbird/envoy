@@ -211,9 +211,13 @@ For details on each command's usage see the official
   SISMEMBER, Set
   SMEMBERS, Set
   SPOP, Set
+  SPUBLISH Pubsub
   SRANDMEMBER, Set
   SREM, Set
   SSCAN, Set
+  SSUBSCRIBE Pubsub
+  SUBSCRIBE, Pubsub
+  SUNSUBSCRIBE Pubsub
   WATCH, String
   ZADD, Sorted Set
   ZCARD, Sorted Set
