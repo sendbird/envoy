@@ -34,8 +34,9 @@ struct SupportedCommands {
         "incrbyfloat", "lindex", "linsert", "llen", "lmove", "lpop", "lpush", "lpushx", "lrange",
         "lrem", "lset", "ltrim", "persist", "pexpire", "pexpireat", "pfadd", "pfcount", "psetex",
         "pttl", "publish", "restore", "rpop", "rpush", "rpushx", "sadd", "scard", "set", "setbit",
-        "setex", "setnx", "setrange", "sismember", "smembers", "spop", "srandmember", "srem",
-        "sscan", "strlen", "ttl", "type", "xack", "xadd", "xautoclaim", "xclaim", "xdel", "xlen",
+        "setex", "setnx", "setrange", "sismember", "smembers", "spop", "spublish", "srandmember", "srem",
+        "sscan", "ssubscribe", "strlen", "subscribe", "sunsubscribe", "ttl", "type", "watch",
+        "xack", "xadd", "xautoclaim", "xclaim", "xdel", "xlen",
         "xpending", "xrange", "xrevrange", "xtrim", "zadd", "zcard", "zcount", "zincrby",
         "zlexcount", "zpopmin", "zpopmax", "zrange", "zrangebylex", "zrangebyscore", "zrank",
         "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "zrevrange",
@@ -174,11 +175,11 @@ struct SupportedCommands {
         "hincrbyfloat", "hmset", "hset", "hsetnx", "incr", "incrby", "incrbyfloat", "linsert",
         "lmove", "lpop", "lpush", "lpushx", "lrem", "lset", "ltrim", "mset", "multi", "persist",
         "pexpire", "pexpireat", "pfadd", "psetex", "restore", "rpop", "rpush", "rpushx", "sadd",
-        "set", "setbit", "setex", "setnx", "setrange", "spop", "srem", "zadd", "zincrby", "touch",
-        "zpopmin", "zpopmax", "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore",
-        "unlink", "copy", "rpoplpush", "smove", "sinterstore", "zunionstore", "zinterstore",
-        "pfmerge", "georadius", "georadiusbymember", "rename", "sort", "sdiffstore", "msetnx",
-        "zrangestore", "sunionstore", "geosearchstore", "zdiffstore", "bitop", "renamenx");
+        "set", "setbit", "setex", "setnx", "setrange", "spop", "spublish", "srem", "zadd", "zincrby",
+        "touch", "zpopmin", "zpopmax", "zrem", "zremrangebylex", "zremrangebyrank",
+        "zremrangebyscore", "unlink", "copy", "rpoplpush", "smove", "sinterstore", "zunionstore",
+        "zinterstore", "pfmerge", "georadius", "georadiusbymember", "rename", "sort", "sdiffstore",
+        "msetnx", "zrangestore", "sunionstore", "geosearchstore", "zdiffstore", "bitop", "renamenx");
   }
 
   static bool isReadCommand(const std::string& command) {
