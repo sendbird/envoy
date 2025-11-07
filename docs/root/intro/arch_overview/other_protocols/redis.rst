@@ -254,6 +254,7 @@ For details on each command's usage see the official
   SISMEMBER, Set
   SMEMBERS, Set
   SPOP, Set
+  SPUBLISH Pubsub
   SRANDMEMBER, Set
   SREM, Set
   SCAN, Generic
@@ -264,8 +265,11 @@ For details on each command's usage see the official
   SINTERSTORE, Set
   SMISMEMBER, Set
   SMOVE, Set
+  SSUBSCRIBE Pubsub
+  SUBSCRIBE, Pubsub
   SUNION, Set
   SUNIONSTORE, Set
+  SUNSUBSCRIBE Pubsub
   WATCH, String
   UNWATCH, String
   ZADD, Sorted Set
