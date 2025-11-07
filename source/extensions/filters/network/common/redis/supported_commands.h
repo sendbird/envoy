@@ -30,11 +30,12 @@ struct SupportedCommands {
         "lpush", "lpushx", "lrange", "lrem", "lset", "ltrim", "persist", "pexpire", "pexpireat",
         "pfadd", "pfcount", "psetex", "pttl", "publish", "restore", "rpop", "rpush", "rpushx",
         "sadd", "scard", "set", "setbit", "setex", "setnx", "setrange", "sismember", "smembers",
-        "spop", "srandmember", "srem", "sscan", "strlen", "ttl", "type", "xack", "xadd",
-        "xautoclaim", "xclaim", "xdel", "xlen", "xpending", "xrange", "xrevrange", "xtrim", "zadd",
-        "zcard", "zcount", "zincrby", "zlexcount", "zpopmin", "zpopmax", "zrange", "zrangebylex",
-        "zrangebyscore", "zrank", "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore",
-        "zrevrange", "zrevrangebylex", "zrevrangebyscore", "zrevrank", "zscan", "zscore");
+        "spop", "spublish", "srandmember", "srem", "sscan", "strlen", "ssubscribe", "subscribe",
+        "sunsubscribe", "ttl", "type", "watch", "xack", "xadd", "xautoclaim", "xclaim", "xdel",
+        "xlen", "xpending", "xrange", "xrevrange", "xtrim", "zadd", "zcard", "zcount", "zincrby",
+        "zlexcount", "zpopmin", "zpopmax", "zrange", "zrangebylex", "zrangebyscore", "zrank",
+        "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "zrevrange",
+        "zrevrangebylex", "zrevrangebyscore", "zrevrank", "zscan", "zscore");
   }
 
   /**
@@ -124,8 +125,8 @@ struct SupportedCommands {
                            "lpush", "lpushx", "lrem", "lset", "ltrim", "mset", "multi", "persist",
                            "pexpire", "pexpireat", "pfadd", "psetex", "restore", "rpop", "rpush",
                            "rpushx", "sadd", "set", "setbit", "setex", "setnx", "setrange", "spop",
-                           "srem", "zadd", "zincrby", "touch", "zpopmin", "zpopmax", "zrem",
-                           "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "unlink");
+                           "srem", "spublish", "zadd", "zincrby", "touch", "zpopmin", "zpopmax",
+                           "zrem", "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "unlink");
   }
 
   static bool isReadCommand(const std::string& command) {
