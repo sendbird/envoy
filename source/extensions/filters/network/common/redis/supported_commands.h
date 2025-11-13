@@ -28,6 +28,7 @@ struct SupportedCommands {
         "lindex", "linsert", "llen", "lmove", "lpop", "lpush", "lpushx", "lrange", "lrem", "lset",
         "ltrim", "persist", "pexpire", "pexpireat", "pfadd", "pfcount", "psetex", "pttl", "restore",
         "rpop", "rpush", "rpushx", "sadd", "scard", "set", "setbit", "setex", "setnx", "setrange",
+        "spublish", "ssubscribe", "subscribe", "sunsubscribe",
         "sismember", "smembers", "spop", "srandmember", "srem", "sscan", "strlen", "ttl", "type",
         "watch", "zadd", "zcard", "zcount", "zincrby", "zlexcount", "zpopmin", "zpopmax", "zrange",
         "zrangebylex", "zrangebyscore", "zrank", "zrem", "zremrangebylex", "zremrangebyrank",
@@ -102,7 +103,7 @@ struct SupportedCommands {
                            "lpush", "lpushx", "lrem", "lset", "ltrim", "mset", "multi", "persist",
                            "pexpire", "pexpireat", "pfadd", "psetex", "restore", "rpop", "rpush",
                            "rpushx", "sadd", "set", "setbit", "setex", "setnx", "setrange", "spop",
-                           "srem", "zadd", "zincrby", "touch", "zpopmin", "zpopmax", "zrem",
+                           "srem", "spublish", "zadd", "zincrby", "touch", "zpopmin", "zpopmax", "zrem",
                            "zremrangebylex", "zremrangebyrank", "zremrangebyscore", "unlink");
   }
 
