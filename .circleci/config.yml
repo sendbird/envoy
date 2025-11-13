@@ -46,11 +46,11 @@ workflows:
 executors:
   arm64:
     machine:
-      resource_class: arm.2xlarge
+      resource_class: arm.xlarge
       image: ubuntu-2204:current
   amd64:
     machine:
-      resource_class: 2xlarge
+      resource_class: xlarge
       image: ubuntu-2204:current
 
 
