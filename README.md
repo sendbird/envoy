@@ -92,3 +92,21 @@ email to acknowledge your report, and we'll send an additional email when we've 
 positively or negatively.
 
 For further details please see our complete [security release process](SECURITY.md).
+
+### How to build image in local
+```
+ENVOY_DOCKER_IN_DOCKER=1 ENVOY_DOCKER_BUILD_DIR=/Volumes/docker/envoy-build ./ci/run_envoy_docker.sh ci/do_ci.sh debug.server_only
+
+ENVOY_DOCKER_IN_DOCKER=1 \
+ENVOY_DOCKER_BUILD_DIR=/Volumes/docker/envoy-build \
+DOCKER_IMAGE_PREFIX=mesg/envoy \
+ENVOY_VERSION=1.30.5-pubsub \
+DOCKER_REGISTRY=314716043882.dkr.ecr.us-east-1.amazonaws.com \
+DOCKERHUB_USERNAME=AWS \
+DOCKERHUB_PASSWORD=[] \
+CI_BRANCH=refs/tags/v1.30.5-evalro2-pubsub \
+CI_SHA1=707360d2a2110f295b329ea8d13dae49367ccc59 \
+./ci/run_envoy_docker.sh 'ci/do_ci.sh docker'
+```
+
+* Make sure to build one architecture at a time and create manifest covering all of them

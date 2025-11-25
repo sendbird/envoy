@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
+set -xe
 
 # shellcheck source=ci/envoy_build_sha.sh
 . "$(dirname "$0")"/envoy_build_sha.sh
@@ -57,6 +57,7 @@ else
       "-lc"
       "groupadd ${DOCKER_GROUP_ARGS[*]} -f envoygroup \
           && useradd -o --uid ${USER_UID} ${DOCKER_USER_ARGS[*]} --no-create-home --home-dir /build envoybuild \
+          && chmod 777 /var/run/docker.sock \
           && usermod -a -G pcap envoybuild \
           && chown envoybuild:envoygroup /build \
           && chown envoybuild /proc/self/fd/2 \

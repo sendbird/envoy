@@ -25,7 +25,9 @@ DOCKER_BUILD_TIMEOUT="${DOCKER_BUILD_TIMEOUT:-400}"
 
 DOCKERHUB_REGISTRY="${DOCKERHUB_REGISTRY:-docker.io}"
 
-DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/arm64,linux/amd64}"
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64,linux/arm64}"
+
+echo "Docker platform is $DOCKER_PLATFORM"
 
 function is_windows() {
     [[ -n "$DOCKER_FAKE_WIN" ]]  || [[ "$(uname -s)" == *NT* ]]
@@ -71,7 +73,8 @@ elif [[ -n "$DOCKERHUB_USERNAME" ]] && [[ -n "$DOCKERHUB_PASSWORD" ]]; then
         echo "Pushing images for release branch ${CI_BRANCH}."
         PUSH_IMAGES_TO_REGISTRY=1
     else
-        echo 'Ignoring non-release branch for docker push.'
+        echo 'Push anyway.'
+        PUSH_IMAGES_TO_REGISTRY=1
     fi
 else
     echo 'No credentials for docker push.'
@@ -229,6 +232,8 @@ build_and_maybe_push_image () {
             # For linux non-debug builds, save it first in the tarball, we will push it
             # with skopeo from there if needed.
             args+=("-o" "type=oci,dest=${docker_image_tarball}")
+            #action="BUILD+LOAD"
+            #args+=("--load")
         fi
     fi
 

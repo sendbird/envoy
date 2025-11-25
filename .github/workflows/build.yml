@@ -1,0 +1,39 @@
+name: Build Envoy
+
+on:
+  push:
+    tags:
+      - "v**"
+
+jobs:
+  build-x64:
+    name: Build Envoy (x64)
+    runs-on: mesg-use1-amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Envoy
+        run: ./ci/run_envoy_docker.sh 'ci/do_ci.sh release.server_only'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-x64
+          path: /tmp/envoy-docker-build/envoy/x64/bin/release.tar.zst
+
+  build-arm64:
+    name: Build Envoy (arm64)
+    runs-on: mesg-use1-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Envoy
+        run: ./ci/run_envoy_docker.sh 'ci/do_ci.sh release.server_only'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-arm64
+          path: /tmp/envoy-docker-build/envoy/arm64/bin/release.tar.zst
