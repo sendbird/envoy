@@ -10,6 +10,7 @@
 #include "envoy/common/time.h"
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 #include "envoy/stats/stats_macros.h"
+#include "envoy/stats/timespan.h"
 #include "envoy/thread_local/thread_local.h"
 #include "envoy/upstream/cluster_manager.h"
 
@@ -182,6 +183,7 @@ private:
     Stats::StatName command_;            // Command name for per-shard command stats
     Stats::Histogram* latency_histogram_{nullptr};  // Per-shard latency histogram
     MonotonicTime start_time_;           // Request start time for latency tracking
+    Stats::TimespanPtr command_latency_timer_;  // Per-shard per-command latency timer
   };
 
   struct ThreadLocalPool : public ThreadLocal::ThreadLocalObject,

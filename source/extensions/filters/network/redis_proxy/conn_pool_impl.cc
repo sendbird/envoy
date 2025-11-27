@@ -597,6 +597,11 @@ InstanceImpl::PendingRequest::PendingRequest(InstanceImpl::ThreadLocalPool& pare
   if (shard_scope_ && parent_.config_->enableCommandStats()) {
     command_ = parent_.redis_command_stats_->getCommandFromRequest(getRequest(incoming_request_));
     parent_.redis_command_stats_->updateStatsTotal(*shard_scope_, command_);
+    // Create per-shard per-command latency timer when both command stats and per-shard latency are enabled
+    if (parent_.config_->enablePerShardLatencyStats()) {
+      command_latency_timer_ = parent_.redis_command_stats_->createCommandTimer(
+          *shard_scope_, command_, parent_.dispatcher_.timeSource());
+    }
   }
 }
 
@@ -639,6 +644,10 @@ void InstanceImpl::PendingRequest::onResponse(Common::Redis::RespValuePtr&& resp
         end_time - start_time_).count();
     latency_histogram_->recordValue(latency_us);
   }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
+  }
   pool_callbacks_.onResponse(std::move(response));
   parent_.onRequestCompleted();
 }
@@ -660,6 +669,10 @@ void InstanceImpl::PendingRequest::onFailure() {
     const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
         end_time - start_time_).count();
     latency_histogram_->recordValue(latency_us);
+  }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
   }
   pool_callbacks_.onFailure();
   parent_.refresh_manager_->onFailure(parent_.cluster_name_);
@@ -767,6 +780,17 @@ void InstanceImpl::PendingRequest::cancel() {
   // Update per-shard command stats (failure due to cancellation)
   if (shard_scope_ && parent_.config_->enableCommandStats()) {
     parent_.redis_command_stats_->updateStats(*shard_scope_, command_, false);
+  }
+  // Record per-shard latency histogram (even for cancellations)
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
+  }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
   }
   parent_.onRequestCompleted();
 }
