@@ -42,7 +42,8 @@ ConfigImpl::ConfigImpl(
       max_upstream_unknown_connections_(
           PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, max_upstream_unknown_connections, 100)),
       enable_command_stats_(config.enable_command_stats()),
-      enable_per_shard_stats_(config.enable_per_shard_stats()) {
+      enable_per_shard_stats_(config.enable_per_shard_stats()),
+      enable_per_shard_latency_stats_(config.enable_per_shard_latency_stats()) {
   switch (config.read_policy()) {
     PANIC_ON_PROTO_ENUM_SENTINEL_VALUES;
   case envoy::extensions::filters::network::redis_proxy::v3::RedisProxy::ConnPoolSettings::MASTER:

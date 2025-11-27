@@ -189,6 +189,11 @@ public:
   virtual bool enablePerShardStats() const PURE;
 
   /**
+   * @return when enabled, per-shard latency histograms will be recorded.
+   */
+  virtual bool enablePerShardLatencyStats() const PURE;
+
+  /**
    * @return the read policy the proxy should use.
    */
   virtual ReadPolicy readPolicy() const PURE;

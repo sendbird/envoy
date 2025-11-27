@@ -33,7 +33,7 @@ message RedisProxy {
       "envoy.config.filter.network.redis_proxy.v2.RedisProxy";
 
   // Redis connection pool settings.
-  // [#next-free-field: 12]
+  // [#next-free-field: 13]
   message ConnPoolSettings {
     option (udpa.annotations.versioning).previous_message_type =
         "envoy.config.filter.network.redis_proxy.v2.RedisProxy.ConnPoolSettings";
@@ -150,6 +150,21 @@ message RedisProxy {
     //   Enabling this option may significantly increase metric cardinality in large clusters
     //   with many shards. Use with caution in production environments.
     bool enable_per_shard_stats = 11;
+
+    // Enable per-shard latency histogram for tracking request latency per upstream host (shard).
+    // When enabled, the following histogram will be emitted per shard:
+    //
+    // * ``upstream_rq_time``: Request latency histogram in microseconds
+    //
+    // The histogram will be emitted under the scope:
+    // ``cluster.<cluster_name>.shard.<host_address>.upstream_rq_time``
+    //
+    // This option requires ``enable_per_shard_stats`` to be enabled.
+    //
+    // .. note::
+    //   Enabling this option may significantly increase metric cardinality in large clusters
+    //   with many shards. Use with caution in production environments.
+    bool enable_per_shard_latency_stats = 12;
   }
 
   message PrefixRoutes {

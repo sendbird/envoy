@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "envoy/common/time.h"
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 #include "envoy/stats/stats_macros.h"
 #include "envoy/thread_local/thread_local.h"
@@ -72,6 +73,7 @@ using RedisShardStatsSharedPtr = std::shared_ptr<RedisShardStats>;
 struct ShardStatsEntry {
   Stats::ScopeSharedPtr scope_;
   RedisShardStatsSharedPtr stats_;
+  Stats::Histogram* latency_histogram_{nullptr};  // Per-shard latency histogram (optional)
 };
 
 class DoNothingPoolCallbacks : public PoolCallbacks {
@@ -145,7 +147,8 @@ private:
         public Logger::Loggable<Logger::Id::redis> {
     PendingRequest(ThreadLocalPool& parent, RespVariant&& incoming_request,
                    PoolCallbacks& pool_callbacks, Upstream::HostConstSharedPtr& host,
-                   RedisShardStatsSharedPtr shard_stats, Stats::ScopeSharedPtr shard_scope);
+                   RedisShardStatsSharedPtr shard_stats, Stats::ScopeSharedPtr shard_scope,
+                   Stats::Histogram* latency_histogram);
     ~PendingRequest() override;
 
     // Common::Redis::Client::ClientCallbacks
@@ -177,6 +180,8 @@ private:
     RedisShardStatsSharedPtr shard_stats_;
     Stats::ScopeSharedPtr shard_scope_;  // Scope for per-shard command stats
     Stats::StatName command_;            // Command name for per-shard command stats
+    Stats::Histogram* latency_histogram_{nullptr};  // Per-shard latency histogram
+    MonotonicTime start_time_;           // Request start time for latency tracking
   };
 
   struct ThreadLocalPool : public ThreadLocal::ThreadLocalObject,
@@ -211,6 +216,7 @@ private:
     void drainClients();
     RedisShardStatsSharedPtr getOrCreateShardStats(const std::string& host_address);
     Stats::ScopeSharedPtr getShardScope(const std::string& host_address);
+    Stats::Histogram* getOrCreateShardLatencyHistogram(const std::string& host_address);
 
     // Upstream::ClusterUpdateCallbacks
     void onClusterAddOrUpdate(absl::string_view cluster_name,

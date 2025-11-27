@@ -299,6 +299,23 @@ InstanceImpl::ThreadLocalPool::getShardScope(const std::string& host_address) {
   return nullptr;
 }
 
+Stats::Histogram*
+InstanceImpl::ThreadLocalPool::getOrCreateShardLatencyHistogram(const std::string& host_address) {
+  auto it = shard_stats_map_.find(host_address);
+  if (it == shard_stats_map_.end()) {
+    // Create shard stats entry first if it doesn't exist
+    getOrCreateShardStats(host_address);
+    it = shard_stats_map_.find(host_address);
+  }
+
+  if (it->second.latency_histogram_ == nullptr) {
+    // Create the histogram if it doesn't exist
+    it->second.latency_histogram_ = &it->second.scope_->histogramFromString(
+        "upstream_rq_latency", Stats::Histogram::Unit::Microseconds);
+  }
+  return it->second.latency_histogram_;
+}
+
 InstanceImpl::ThreadLocalActiveClientPtr&
 InstanceImpl::ThreadLocalPool::threadLocalActiveClient(Upstream::HostConstSharedPtr host) {
   TokenBucketPtr& rate_limiter = cx_rate_limiter_map_[host];
@@ -488,14 +505,19 @@ InstanceImpl::ThreadLocalPool::makeRequestToHost(Upstream::HostConstSharedPtr& h
   // Get or create per-shard stats for tracking hot shard usage (if enabled)
   RedisShardStatsSharedPtr shard_stats = nullptr;
   Stats::ScopeSharedPtr shard_scope = nullptr;
+  Stats::Histogram* latency_histogram = nullptr;
   if (config_->enablePerShardStats()) {
     const std::string host_address = host->address()->asString();
     shard_stats = getOrCreateShardStats(host_address);
     shard_scope = getShardScope(host_address);
   }
+  if (config_->enablePerShardLatencyStats()) {
+    const std::string host_address = host->address()->asString();
+    latency_histogram = getOrCreateShardLatencyHistogram(host_address);
+  }
 
   pending_requests_.emplace_back(*this, std::move(request), callbacks, host, shard_stats,
-                                 shard_scope);
+                                 shard_scope, latency_histogram);
   PendingRequest& pending_request = pending_requests_.back();
 
   if (!transaction.active_) {
@@ -560,10 +582,12 @@ InstanceImpl::PendingRequest::PendingRequest(InstanceImpl::ThreadLocalPool& pare
                                              PoolCallbacks& pool_callbacks,
                                              Upstream::HostConstSharedPtr& host,
                                              RedisShardStatsSharedPtr shard_stats,
-                                             Stats::ScopeSharedPtr shard_scope)
+                                             Stats::ScopeSharedPtr shard_scope,
+                                             Stats::Histogram* latency_histogram)
     : parent_(parent), incoming_request_(std::move(incoming_request)),
       pool_callbacks_(pool_callbacks), host_(host), shard_stats_(std::move(shard_stats)),
-      shard_scope_(std::move(shard_scope)) {
+      shard_scope_(std::move(shard_scope)), latency_histogram_(latency_histogram),
+      start_time_(parent.dispatcher_.timeSource().monotonicTime()) {
   // Track per-shard request metrics and command stats
   if (shard_stats_) {
     shard_stats_->upstream_rq_total_.inc();
@@ -608,6 +632,13 @@ void InstanceImpl::PendingRequest::onResponse(Common::Redis::RespValuePtr&& resp
   if (shard_scope_ && parent_.config_->enableCommandStats()) {
     parent_.redis_command_stats_->updateStats(*shard_scope_, command_, true);
   }
+  // Record per-shard latency histogram
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
+  }
   pool_callbacks_.onResponse(std::move(response));
   parent_.onRequestCompleted();
 }
@@ -622,6 +653,13 @@ void InstanceImpl::PendingRequest::onFailure() {
   // Update per-shard command stats (failure)
   if (shard_scope_ && parent_.config_->enableCommandStats()) {
     parent_.redis_command_stats_->updateStats(*shard_scope_, command_, false);
+  }
+  // Record per-shard latency histogram (even for failures)
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
   }
   pool_callbacks_.onFailure();
   parent_.refresh_manager_->onFailure(parent_.cluster_name_);
