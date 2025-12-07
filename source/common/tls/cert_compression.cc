@@ -1,6 +1,8 @@
 #include "source/common/tls/cert_compression.h"
 
 #include "source/common/common/assert.h"
+#include "source/common/tls/ssl_ctx_stats_provider.h"
+#include "source/common/tls/stats.h"
 
 #include "brotli/decode.h"
 #include "brotli/encode.h"
@@ -29,16 +31,24 @@ private:
   CleanupFunc cleanup_;
 };
 
-} // namespace
-
-void CertCompression::registerAll(SSL_CTX* ssl_ctx) {
-  // Register all algorithms in priority order.
-  // The TLS handshake will negotiate the best mutually supported algorithm.
-  // Priority: brotli > zstd > zlib (brotli generally provides best compression for certs)
-  registerBrotli(ssl_ctx);
-  registerZstd(ssl_ctx);
-  registerZlib(ssl_ctx);
+// Record certificate compression stats per algorithm for monitoring compression effectiveness.
+void recordCompressedCertSize(SSL* ssl, size_t uncompressed_size, size_t compressed_size,
+                              const std::string& algo) {
+  SSL_CTX* ssl_ctx = SSL_get_SSL_CTX(ssl);
+  if (ssl_ctx == nullptr) {
+    return;
+  }
+  auto* provider = static_cast<SslCtxStatsProvider*>(SSL_CTX_get_app_data(ssl_ctx));
+  if (provider != nullptr) {
+    const std::string prefix = "ssl.certificate_compression." + algo + ".";
+    CertCompressionStats stats = generateCertCompressionStats(provider->statsScope(), prefix);
+    stats.compressed_.inc();
+    stats.total_uncompressed_bytes_.add(uncompressed_size);
+    stats.total_compressed_bytes_.add(compressed_size);
+  }
 }
+
+} // namespace
 
 void CertCompression::registerBrotli(SSL_CTX* ssl_ctx) {
   auto ret = SSL_CTX_add_cert_compression_alg(ssl_ctx, TLSEXT_cert_compression_brotli,
@@ -59,7 +69,7 @@ void CertCompression::registerZlib(SSL_CTX* ssl_ctx) {
 }
 
 // Brotli compression implementation
-int CertCompression::compressBrotli(SSL*, CBB* out, const uint8_t* in, size_t in_len) {
+int CertCompression::compressBrotli(SSL* ssl, CBB* out, const uint8_t* in, size_t in_len) {
   size_t encoded_size = BrotliEncoderMaxCompressedSize(in_len);
   if (encoded_size == 0) {
     IS_ENVOY_BUG("BrotliEncoderMaxCompressedSize returned 0");
@@ -84,6 +94,7 @@ int CertCompression::compressBrotli(SSL*, CBB* out, const uint8_t* in, size_t in
     return FAILURE;
   }
 
+  recordCompressedCertSize(ssl, in_len, encoded_size, "brotli");
   ENVOY_LOG(trace, "Cert brotli compression successful");
   return SUCCESS;
 }
@@ -124,7 +135,7 @@ int CertCompression::decompressBrotli(SSL*, CRYPTO_BUFFER** out, size_t uncompre
 }
 
 // Zstd compression implementation
-int CertCompression::compressZstd(SSL*, CBB* out, const uint8_t* in, size_t in_len) {
+int CertCompression::compressZstd(SSL* ssl, CBB* out, const uint8_t* in, size_t in_len) {
   size_t const max_size = ZSTD_compressBound(in_len);
   if (max_size == 0) {
     IS_ENVOY_BUG("ZSTD_compressBound returned 0");
@@ -149,6 +160,7 @@ int CertCompression::compressZstd(SSL*, CBB* out, const uint8_t* in, size_t in_l
     return FAILURE;
   }
 
+  recordCompressedCertSize(ssl, in_len, compressed_size, "zstd");
   ENVOY_LOG(trace, "Cert zstd compression successful");
   return SUCCESS;
 }
@@ -186,7 +198,7 @@ int CertCompression::decompressZstd(SSL*, CRYPTO_BUFFER** out, size_t uncompress
 }
 
 // Zlib compression implementation
-int CertCompression::compressZlib(SSL*, CBB* out, const uint8_t* in, size_t in_len) {
+int CertCompression::compressZlib(SSL* ssl, CBB* out, const uint8_t* in, size_t in_len) {
   z_stream z = {};
   // The deflateInit macro from zlib.h contains an old-style cast, so we need to suppress the
   // warning for this call.
@@ -228,6 +240,7 @@ int CertCompression::compressZlib(SSL*, CBB* out, const uint8_t* in, size_t in_l
     return FAILURE;
   }
 
+  recordCompressedCertSize(ssl, in_len, z.total_out, "zlib");
   ENVOY_LOG(trace, "Cert zlib compression successful");
   return SUCCESS;
 }

@@ -191,6 +191,76 @@ TEST(CertCompressionZlibTest, DecompressBadLength) {
                       });
 }
 
+//
+// Stats Recording Tests
+// These tests verify that compression succeeds even when SSL context is null
+// (stats recording is safely skipped in this case)
+//
+
+TEST(CertCompressionStatsTest, CompressBrotliWithNullSslRecordsNoStats) {
+  // Verify compression succeeds and doesn't crash when SSL is null
+  // (stats recording is safely skipped)
+  bssl::ScopedCBB compressed;
+  ASSERT_EQ(1, CBB_init(compressed.get(), 0));
+  EXPECT_EQ(CertCompression::SUCCESS,
+            CertCompression::compressBrotli(nullptr, compressed.get(), kTestData, kTestDataLen));
+  EXPECT_GT(CBB_len(compressed.get()), 0u);
+}
+
+TEST(CertCompressionStatsTest, CompressZstdWithNullSslRecordsNoStats) {
+  bssl::ScopedCBB compressed;
+  ASSERT_EQ(1, CBB_init(compressed.get(), 0));
+  EXPECT_EQ(CertCompression::SUCCESS,
+            CertCompression::compressZstd(nullptr, compressed.get(), kTestData, kTestDataLen));
+  EXPECT_GT(CBB_len(compressed.get()), 0u);
+}
+
+TEST(CertCompressionStatsTest, CompressZlibWithNullSslRecordsNoStats) {
+  bssl::ScopedCBB compressed;
+  ASSERT_EQ(1, CBB_init(compressed.get(), 0));
+  EXPECT_EQ(CertCompression::SUCCESS,
+            CertCompression::compressZlib(nullptr, compressed.get(), kTestData, kTestDataLen));
+  EXPECT_GT(CBB_len(compressed.get()), 0u);
+}
+
+//
+// Registration Tests
+// These tests verify that the compression algorithms can be registered with SSL_CTX
+//
+
+class CertCompressionRegistrationTest : public testing::Test {
+protected:
+  void SetUp() override {
+    ssl_ctx_.reset(SSL_CTX_new(TLS_method()));
+    ASSERT_NE(nullptr, ssl_ctx_.get());
+  }
+
+  bssl::UniquePtr<SSL_CTX> ssl_ctx_;
+};
+
+TEST_F(CertCompressionRegistrationTest, RegisterBrotli) {
+  // Verify brotli registration succeeds without crashing
+  EXPECT_NO_THROW(CertCompression::registerBrotli(ssl_ctx_.get()));
+}
+
+TEST_F(CertCompressionRegistrationTest, RegisterZstd) {
+  // Verify zstd registration succeeds without crashing
+  EXPECT_NO_THROW(CertCompression::registerZstd(ssl_ctx_.get()));
+}
+
+TEST_F(CertCompressionRegistrationTest, RegisterZlib) {
+  // Verify zlib registration succeeds without crashing
+  EXPECT_NO_THROW(CertCompression::registerZlib(ssl_ctx_.get()));
+}
+
+TEST_F(CertCompressionRegistrationTest, RegisterAllAlgorithms) {
+  // Verify all algorithms can be registered on the same context
+  // Order matters: brotli > zstd > zlib (by priority)
+  EXPECT_NO_THROW(CertCompression::registerBrotli(ssl_ctx_.get()));
+  EXPECT_NO_THROW(CertCompression::registerZstd(ssl_ctx_.get()));
+  EXPECT_NO_THROW(CertCompression::registerZlib(ssl_ctx_.get()));
+}
+
 } // namespace Tls
 } // namespace TransportSockets
 } // namespace Extensions

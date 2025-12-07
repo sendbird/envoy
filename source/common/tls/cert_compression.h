@@ -32,10 +32,6 @@ namespace Tls {
  */
 class CertCompression : protected Logger::Loggable<Logger::Id::connection> {
 public:
-  // Register all supported compression algorithms in priority order.
-  // Priority: brotli > zstd > zlib (brotli generally provides best compression for certs)
-  static void registerAll(SSL_CTX* ssl_ctx);
-
   // Individual registration functions for each algorithm.
   static void registerBrotli(SSL_CTX* ssl_ctx);
   static void registerZstd(SSL_CTX* ssl_ctx);

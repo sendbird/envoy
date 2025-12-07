@@ -21,9 +21,7 @@ namespace Tls {
   COUNTER(ocsp_staple_omitted)                                                                     \
   COUNTER(ocsp_staple_responses)                                                                   \
   COUNTER(ocsp_staple_requests)                                                                    \
-  COUNTER(was_key_usage_invalid)                                                                   \
-  HISTOGRAM(peer_certificate_chain_bytes, Bytes)                                                   \
-  HISTOGRAM(local_certificate_chain_bytes, Bytes)
+  COUNTER(was_key_usage_invalid)
 
 /**
  * Wrapper struct for SSL stats. @see stats_macros.h
@@ -35,6 +33,20 @@ struct SslStats {
 SslStats generateSslStats(Stats::Scope& store);
 
 Stats::Gauge& createCertificateExpirationGauge(Stats::Scope& scope, const std::string& cert_name);
+
+/**
+ * Certificate compression stats per algorithm. @see stats_macros.h
+ */
+#define CERT_COMPRESSION_STATS(COUNTER)                                                            \
+  COUNTER(compressed)                                                                              \
+  COUNTER(total_uncompressed_bytes)                                                                \
+  COUNTER(total_compressed_bytes)
+
+struct CertCompressionStats {
+  CERT_COMPRESSION_STATS(GENERATE_COUNTER_STRUCT)
+};
+
+CertCompressionStats generateCertCompressionStats(Stats::Scope& scope, const std::string& prefix);
 
 } // namespace Tls
 } // namespace TransportSockets

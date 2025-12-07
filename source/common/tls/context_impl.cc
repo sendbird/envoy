@@ -164,9 +164,15 @@ ContextImpl::ContextImpl(Stats::Scope& scope, const Envoy::Ssl::ContextConfig& c
       }
     }
 
-    // Register certificate compression algorithms to reduce TLS handshake size.
-    // This registers brotli, zstd, and zlib in priority order (RFC 8879).
-    CertCompression::registerAll(ctx.ssl_ctx_.get());
+    // Register certificate compression algorithms to reduce TLS handshake size (RFC 8879).
+    // Only register if the runtime feature flag is enabled (default: disabled).
+    if (Runtime::runtimeFeatureEnabled(
+            "envoy.reloadable_features.tls_support_certificate_compression")) {
+      // Priority: brotli > zstd > zlib (brotli generally provides best compression for certs)
+      CertCompression::registerBrotli(ctx.ssl_ctx_.get());
+      CertCompression::registerZstd(ctx.ssl_ctx_.get());
+      CertCompression::registerZlib(ctx.ssl_ctx_.get());
+    }
   }
 
   auto verify_mode_or_error = cert_validator_->initializeSslContexts(
@@ -574,16 +580,6 @@ void ContextImpl::logHandshake(SSL* ssl) const {
     stats_.was_key_usage_invalid_.inc();
   }
 
-  // Record certificate chain sizes (DER-encoded bytes) for TLS overhead visibility.
-  const size_t peer_cert_size = Utility::getPeerCertificateChainDerSize(ssl);
-  if (peer_cert_size > 0) {
-    stats_.peer_certificate_chain_bytes_.recordValue(peer_cert_size);
-  }
-
-  const size_t local_cert_size = Utility::getLocalCertificateChainDerSize(ssl);
-  if (local_cert_size > 0) {
-    stats_.local_certificate_chain_bytes_.recordValue(local_cert_size);
-  }
 }
 
 std::vector<Ssl::PrivateKeyMethodProviderSharedPtr> ContextImpl::getPrivateKeyMethodProviders() {

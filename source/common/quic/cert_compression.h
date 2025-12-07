@@ -1,5 +1,6 @@
 #pragma once
 
+#include "source/common/runtime/runtime_features.h"
 #include "source/common/tls/cert_compression.h"
 
 namespace Envoy {
@@ -12,11 +13,20 @@ namespace Quic {
  */
 class CertCompression : protected Logger::Loggable<Logger::Id::quic> {
 public:
-  // Registers all compression and decompression functions on `ssl_ctx`.
-  // This is a wrapper that calls the TLS implementation.
-  // Registers brotli, zstd, and zlib in priority order (RFC 8879).
+  // Registers compression and decompression functions on `ssl_ctx`.
+  // When runtime feature is enabled: registers all algorithms (brotli, zstd, zlib)
+  // When runtime feature is disabled: registers zlib only (backward compat)
   static void registerSslContext(SSL_CTX* ssl_ctx) {
-    Extensions::TransportSockets::Tls::CertCompression::registerAll(ssl_ctx);
+    if (Runtime::runtimeFeatureEnabled(
+            "envoy.reloadable_features.tls_support_certificate_compression")) {
+      // Priority: brotli > zstd > zlib (brotli generally provides best compression for certs)
+      Extensions::TransportSockets::Tls::CertCompression::registerBrotli(ssl_ctx);
+      Extensions::TransportSockets::Tls::CertCompression::registerZstd(ssl_ctx);
+      Extensions::TransportSockets::Tls::CertCompression::registerZlib(ssl_ctx);
+    } else {
+      // Backward compatibility: register zlib only
+      Extensions::TransportSockets::Tls::CertCompression::registerZlib(ssl_ctx);
+    }
   }
 
   // Callbacks for `SSL_CTX_add_cert_compression_alg`.
