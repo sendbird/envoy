@@ -2,6 +2,7 @@
 
 #include "source/common/common/assert.h"
 #include "source/common/quic/envoy_quic_proof_source.h"
+#include "source/common/quic/envoy_quic_utils.h"
 #include "source/common/quic/quic_server_transport_socket_factory.h"
 
 #include "quiche/quic/platform/api/quic_bug_tracker.h"
@@ -89,8 +90,13 @@ quic::QuicAsyncStatus EnvoyTlsServerHandshaker::EnvoyProofSourceHandle::SelectCe
       proof_source_->getTransportSocketAndFilterChain(server_address, client_address, hostname);
 
   if (transport_data.has_value()) {
-    SSL_set_ex_data(client_hello.ssl, EnvoyQuicProofSource::filterChainExDataIndex(),
-                    const_cast<Network::FilterChain*>(&transport_data->filter_chain_));
+    // Store extended context with filter chain AND addresses for use in SSL callbacks
+    // (session ticket processing, keylog, etc.). Memory is freed by ex_data destructor.
+    auto* conn_ctx = new QuicSslConnectionContext{
+        &transport_data->filter_chain_,
+        quicAddressToEnvoyAddressInstance(server_address),
+        quicAddressToEnvoyAddressInstance(client_address)};
+    SSL_set_ex_data(client_hello.ssl, EnvoyQuicProofSource::filterChainExDataIndex(), conn_ctx);
 
     auto& factory = dynamic_cast<const QuicServerTransportSocketFactory&>(
         transport_data->filter_chain_.transportSocketFactory());

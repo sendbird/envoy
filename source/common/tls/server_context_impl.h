@@ -73,6 +73,9 @@ public:
   int sessionTicketProcess(SSL* ssl, uint8_t* key_name, uint8_t* iv, EVP_CIPHER_CTX* ctx,
                            HMAC_CTX* hmac_ctx, int encrypt);
 
+  void writeKeyLog(const char* line, const Network::Address::Instance* local_addr,
+                   const Network::Address::Instance* remote_addr) const;
+
 protected:
   ServerContextImpl(
       Stats::Scope& scope, const Envoy::Ssl::ServerContextConfig& config,

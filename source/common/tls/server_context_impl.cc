@@ -389,6 +389,22 @@ int ServerContextImpl::sessionTicketProcess(SSL*, uint8_t* key_name, uint8_t* iv
   }
 }
 
+void ServerContextImpl::writeKeyLog(const char* line,
+                                    const Network::Address::Instance* local_addr,
+                                    const Network::Address::Instance* remote_addr) const {
+  if (tls_keylog_file_ == nullptr) {
+    return;
+  }
+
+  // Apply address filtering (same logic as TCP keylogCallback in ContextImpl).
+  if ((tls_keylog_local_.getIpListSize() == 0 ||
+       (local_addr != nullptr && tls_keylog_local_.contains(*local_addr))) &&
+      (tls_keylog_remote_.getIpListSize() == 0 ||
+       (remote_addr != nullptr && tls_keylog_remote_.contains(*remote_addr)))) {
+    tls_keylog_file_->write(absl::StrCat(line, "\n"));
+  }
+}
+
 // Returns a list of client capabilities for ECDSA curves as NIDs. An empty vector indicates
 // a client that is unable to handle ECDSA.
 Ssl::CurveNIDVector

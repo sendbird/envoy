@@ -19,8 +19,13 @@ namespace Quic {
 
 int EnvoyQuicProofSource::filterChainExDataIndex() {
   CONSTRUCT_ON_FIRST_USE(int, []() -> int {
-    int index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
-    RELEASE_ASSERT(index >= 0, "Failed to allocate SSL ex_data index for filter chain");
+    // Register with destructor callback to clean up QuicSslConnectionContext when SSL is freed.
+    int index = SSL_get_ex_new_index(
+        0, nullptr, nullptr, nullptr,
+        [](void*, void* ptr, CRYPTO_EX_DATA*, int, long, void*) {
+          delete static_cast<QuicSslConnectionContext*>(ptr);
+        });
+    RELEASE_ASSERT(index >= 0, "Failed to allocate SSL ex_data index for connection context");
     return index;
   }());
 }
@@ -127,6 +132,9 @@ void EnvoyQuicProofSource::updateFilterChainManager(
 void EnvoyQuicProofSource::OnNewSslCtx(SSL_CTX* ssl_ctx) {
   CertCompression::registerSslContext(ssl_ctx);
 
+  // Register keylog callback for QUIC TLS debugging (NSS Key Log Format).
+  SSL_CTX_set_keylog_callback(ssl_ctx, quicKeylogCallback);
+
   if (!Runtime::runtimeFeatureEnabled(
           "envoy.reloadable_features.quic_session_ticket_support")) {
     return;
@@ -135,17 +143,35 @@ void EnvoyQuicProofSource::OnNewSslCtx(SSL_CTX* ssl_ctx) {
   SSL_CTX_set_tlsext_ticket_key_cb(
       ssl_ctx, [](SSL* ssl, uint8_t* key_name, uint8_t* iv, EVP_CIPHER_CTX* ctx,
                   HMAC_CTX* hmac_ctx, int encrypt) -> int {
-        auto* filter_chain = static_cast<const Network::FilterChain*>(
+        // Retrieve QuicSslConnectionContext from SSL ex_data.
+        auto* conn_ctx = static_cast<const QuicSslConnectionContext*>(
             SSL_get_ex_data(ssl, filterChainExDataIndex()));
-        if (filter_chain == nullptr) {
+        if (conn_ctx == nullptr || conn_ctx->filter_chain == nullptr) {
           return 0;
         }
 
         auto& transport_socket_factory = dynamic_cast<const QuicServerTransportSocketFactory&>(
-            filter_chain->transportSocketFactory());
+            conn_ctx->filter_chain->transportSocketFactory());
         return transport_socket_factory.sessionTicketProcess(ssl, key_name, iv, ctx, hmac_ctx,
                                                              encrypt);
       });
+}
+
+void EnvoyQuicProofSource::quicKeylogCallback(const SSL* ssl, const char* line) {
+  // Retrieve connection context from SSL ex_data.
+  auto* conn_ctx = static_cast<const QuicSslConnectionContext*>(
+      SSL_get_ex_data(ssl, filterChainExDataIndex()));
+
+  if (conn_ctx == nullptr || conn_ctx->filter_chain == nullptr) {
+    return;
+  }
+
+  // Get transport socket factory from filter chain and delegate keylog writing.
+  auto& transport_socket_factory = dynamic_cast<const QuicServerTransportSocketFactory&>(
+      conn_ctx->filter_chain->transportSocketFactory());
+
+  transport_socket_factory.writeKeyLog(line, conn_ctx->local_address.get(),
+                                        conn_ctx->remote_address.get());
 }
 
 } // namespace Quic

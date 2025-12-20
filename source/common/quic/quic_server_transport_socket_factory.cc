@@ -196,6 +196,27 @@ int QuicServerTransportSocketFactory::sessionTicketProcess(SSL* ssl, uint8_t* ke
   return server_ctx->sessionTicketProcess(ssl, key_name, iv, ctx, hmac_ctx, encrypt);
 }
 
+void QuicServerTransportSocketFactory::writeKeyLog(
+    const char* line, const Network::Address::Instance* local_addr,
+    const Network::Address::Instance* remote_addr) const {
+  Envoy::Ssl::ServerContextSharedPtr ssl_ctx;
+  {
+    absl::ReaderMutexLock l(ssl_ctx_mu_);
+    ssl_ctx = ssl_ctx_;
+  }
+  if (!ssl_ctx) {
+    return;
+  }
+
+  auto server_ctx =
+      std::dynamic_pointer_cast<Extensions::TransportSockets::Tls::ServerContextImpl>(ssl_ctx);
+  if (!server_ctx) {
+    return;
+  }
+
+  server_ctx->writeKeyLog(line, local_addr, remote_addr);
+}
+
 absl::Status QuicServerTransportSocketFactory::onSecretUpdated() {
   ENVOY_LOG(debug, "Secret is updated.");
 

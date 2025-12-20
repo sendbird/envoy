@@ -1,6 +1,7 @@
 #pragma once
 
 #include "envoy/extensions/transport_sockets/quic/v3/quic_transport.pb.h"
+#include "envoy/network/address.h"
 #include "envoy/network/transport_socket.h"
 #include "envoy/server/transport_socket_config.h"
 #include "envoy/ssl/context_config.h"
@@ -51,6 +52,10 @@ public:
 
   int sessionTicketProcess(SSL* ssl, uint8_t* key_name, uint8_t* iv, EVP_CIPHER_CTX* ctx,
                            HMAC_CTX* hmac_ctx, int encrypt) const;
+
+  // Write TLS key log for QUIC connections with address filtering.
+  void writeKeyLog(const char* line, const Network::Address::Instance* local_addr,
+                   const Network::Address::Instance* remote_addr) const;
 
 protected:
   QuicServerTransportSocketFactory(bool enable_early_data, Stats::Scope& store,

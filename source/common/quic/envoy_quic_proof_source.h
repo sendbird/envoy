@@ -1,5 +1,7 @@
 #pragma once
 
+#include "envoy/network/address.h"
+
 #include "source/common/quic/envoy_quic_proof_source_base.h"
 #include "source/common/quic/quic_server_transport_socket_factory.h"
 #include "source/server/listener_stats.h"
@@ -8,6 +10,14 @@
 
 namespace Envoy {
 namespace Quic {
+
+// Extended context stored in SSL ex_data during QUIC handshakes.
+// Used for session ticket processing, keylog, and other SSL callbacks.
+struct QuicSslConnectionContext {
+  const Network::FilterChain* filter_chain;
+  Network::Address::InstanceConstSharedPtr local_address;
+  Network::Address::InstanceConstSharedPtr remote_address;
+};
 
 // A ProofSource implementation which supplies a proof instance with certs from filter chain.
 class EnvoyQuicProofSource : public EnvoyQuicProofSourceBase {
@@ -29,8 +39,11 @@ public:
 
   void updateFilterChainManager(Network::FilterChainManager& filter_chain_manager);
 
-  // Returns the SSL ex_data index used to store filter chain pointer during QUIC handshakes.
+  // Returns the SSL ex_data index used to store QuicSslConnectionContext during QUIC handshakes.
   static int filterChainExDataIndex();
+
+  // Static callback for TLS key logging (NSS Key Log Format).
+  static void quicKeylogCallback(const SSL* ssl, const char* line);
 
   struct TransportSocketFactoryWithFilterChain {
     const QuicServerTransportSocketFactory& transport_socket_factory_;
