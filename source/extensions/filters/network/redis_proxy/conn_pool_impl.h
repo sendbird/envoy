@@ -96,7 +96,8 @@ public:
       const Extensions::Common::DynamicForwardProxy::DnsCacheSharedPtr& dns_cache,
       absl::optional<envoy::extensions::filters::network::redis_proxy::v3::AwsIam> aws_iam_config,
       absl::optional<Common::Redis::AwsIamAuthenticator::AwsIamAuthenticatorSharedPtr>
-          aws_iam_authenticator);
+          aws_iam_authenticator,
+      const std::string& local_zone = "");
   uint16_t shardSize() override;
   // RedisProxy::ConnPool::Instance
   Common::Redis::Client::PoolRequest*
@@ -263,7 +264,10 @@ private:
     absl::optional<envoy::extensions::filters::network::redis_proxy::v3::AwsIam> aws_iam_config_;
     // Per-shard stats map keyed by host address (e.g., "10.0.0.1:6379")
     absl::node_hash_map<std::string, ShardStatsEntry> shard_stats_map_;
+    std::string client_zone_; // Zone from node.locality.zone
   };
+
+  const std::string& localZone() const { return local_zone_; }
 
   const std::string cluster_name_;
   Upstream::ClusterManager& cm_;
@@ -279,6 +283,7 @@ private:
   absl::optional<Common::Redis::AwsIamAuthenticator::AwsIamAuthenticatorSharedPtr>
       aws_iam_authenticator_;
   absl::optional<envoy::extensions::filters::network::redis_proxy::v3::AwsIam> aws_iam_config_;
+  const std::string local_zone_; // Zone from node.locality.zone
 };
 
 } // namespace ConnPool
