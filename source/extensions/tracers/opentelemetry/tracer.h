@@ -65,6 +65,19 @@ private:
    * Removes all spans from the span buffer and sends them to the collector.
    */
   void flushSpans();
+  /**
+   * Generates a 128-bit trace ID following UUIDv7 format (RFC 9562).
+   *
+   * UUIDv7 layout (128 bits):
+   *   [0-47]   48-bit Unix timestamp (milliseconds)
+   *   [48-51]  4-bit version (0111 = 7)
+   *   [52-63]  12-bit rand_a
+   *   [64-65]  2-bit variant (10)
+   *   [66-127] 62-bit rand_b
+   *
+   * @return 32-character hex string (128-bit trace ID).
+   */
+  std::string generateTraceIdV7();
 
   OpenTelemetryTraceExporterPtr exporter_;
   Envoy::TimeSource& time_source_;
