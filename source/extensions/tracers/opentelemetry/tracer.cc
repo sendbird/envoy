@@ -5,6 +5,7 @@
 
 #include "envoy/config/trace/v3/opentelemetry.pb.h"
 
+#include "source/common/common/assert.h"
 #include "source/common/common/empty_string.h"
 #include "source/common/common/hex.h"
 #include "source/common/tracing/common_values.h"
@@ -279,6 +280,34 @@ void Tracer::sendSpan(::opentelemetry::proto::trace::v1::Span& span) {
   }
 }
 
+std::string Tracer::generateTraceIdV7() {
+  // UUIDv7 bit layout (RFC 9562):
+  //   High 64 bits: [timestamp_ms (48)] [version (4)] [rand_a (12)]
+  //   Low 64 bits:  [variant (2)] [rand_b (62)]
+
+  // Get current Unix timestamp in milliseconds.
+  const uint64_t timestamp_ms = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          time_source_.systemTime().time_since_epoch())
+          .count());
+  // Timestamp must fit in 48 bits (valid until year ~10889).
+  ASSERT((timestamp_ms >> 48) == 0);
+
+  // Generate random bits.
+  const uint64_t rand_a = random_.random() & 0x0FFFULL;         // 12 bits
+  const uint64_t rand_b = random_.random() & 0x3FFFFFFFFFFFFFFFULL; // 62 bits
+
+  // Assemble high 64 bits: [timestamp_ms(48)][version=7(4)][rand_a(12)]
+  constexpr uint64_t kVersion7 = 0x7ULL;
+  const uint64_t trace_id_high = (timestamp_ms << 16) | (kVersion7 << 12) | rand_a;
+
+  // Assemble low 64 bits: [variant=2(2)][rand_b(62)]
+  constexpr uint64_t kVariantRfc4122 = 0x2ULL;
+  const uint64_t trace_id_low = (kVariantRfc4122 << 62) | rand_b;
+
+  return absl::StrCat(Hex::uint64ToHex(trace_id_high), Hex::uint64ToHex(trace_id_low));
+}
+
 Tracing::SpanPtr Tracer::startSpan(const std::string& operation_name,
                                    const StreamInfo::StreamInfo& stream_info, SystemTime start_time,
                                    Tracing::Decision tracing_decision,
@@ -292,9 +321,7 @@ Tracing::SpanPtr Tracer::startSpan(const std::string& operation_name,
   // Create an Tracers::OpenTelemetry::Span class that will contain the OTel span.
   auto new_span = std::make_unique<Span>(operation_name, stream_info, start_time, time_source_,
                                          *this, span_kind, use_local_decision);
-  uint64_t trace_id_high = random_.random();
-  uint64_t trace_id = random_.random();
-  new_span->setTraceId(absl::StrCat(Hex::uint64ToHex(trace_id_high), Hex::uint64ToHex(trace_id)));
+  new_span->setTraceId(generateTraceIdV7());
   uint64_t span_id = random_.random();
   new_span->setId(Hex::uint64ToHex(span_id));
   if (sampler_) {
