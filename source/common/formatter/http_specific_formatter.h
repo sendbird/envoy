@@ -149,6 +149,20 @@ public:
                                          const StreamInfo::StreamInfo& stream_info) const override;
 };
 
+/**
+ * FormatterProvider for trace sampled status.
+ * Uses Envoy's internal tracing decision (stream_info.traceReason()).
+ * Works at trace origin (e.g., Istio Ingress Gateway) where no incoming traceparent header exists.
+ */
+class TraceSampledFormatter : public FormatterProvider {
+public:
+  absl::optional<std::string>
+  formatWithContext(const HttpFormatterContext& context,
+                    const StreamInfo::StreamInfo& stream_info) const override;
+  Protobuf::Value formatValueWithContext(const HttpFormatterContext& context,
+                                         const StreamInfo::StreamInfo& stream_info) const override;
+};
+
 class GrpcStatusFormatter : public FormatterProvider, HeaderFormatter {
 public:
   enum Format {
