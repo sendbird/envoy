@@ -221,6 +221,37 @@ std::optional<std::string> SpanIDFormatter::format(const Context& context,
   return span_id;
 }
 
+namespace {
+// Determines if the request is being traced based on stream info.
+// This is equivalent to TracerUtility::shouldTraceRequest but inlined
+// to avoid dependency on tracer_lib.
+bool isTraced(const StreamInfo::StreamInfo& stream_info) {
+  if (stream_info.healthCheck()) {
+    return false;
+  }
+  switch (stream_info.traceReason()) {
+  case Tracing::Reason::ClientForced:
+  case Tracing::Reason::ServiceForced:
+  case Tracing::Reason::Sampling:
+    return true;
+  default:
+    return false;
+  }
+}
+} // namespace
+
+absl::optional<std::string>
+TraceSampledFormatter::formatWithContext(const HttpFormatterContext&,
+                                         const StreamInfo::StreamInfo& stream_info) const {
+  return isTraced(stream_info) ? "true" : "false";
+}
+
+Protobuf::Value
+TraceSampledFormatter::formatValueWithContext(const HttpFormatterContext&,
+                                              const StreamInfo::StreamInfo& stream_info) const {
+  return ValueUtil::stringValue(isTraced(stream_info) ? "true" : "false");
+}
+
 absl::StatusOr<std::unique_ptr<GrpcStatusFormatter>>
 GrpcStatusFormatter::create(const std::string& main_header, const std::string& alternative_header,
                             std::optional<size_t> max_length, absl::string_view format) {
@@ -590,6 +621,11 @@ BuiltInHttpCommandParser::getKnownFormatters() {
         {CommandSyntaxChecker::COMMAND_ONLY,
          [](absl::string_view, std::optional<size_t>) {
            return std::make_unique<SpanIDFormatter>();
+         }}},
+       {"TRACE_SAMPLED",
+        {CommandSyntaxChecker::COMMAND_ONLY,
+         [](absl::string_view, absl::optional<size_t>) {
+           return std::make_unique<TraceSampledFormatter>();
          }}},
        {"QUERY_PARAM",
         {CommandSyntaxChecker::PARAMS_REQUIRED | CommandSyntaxChecker::LENGTH_ALLOWED,
