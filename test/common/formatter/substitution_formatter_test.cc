@@ -3588,6 +3588,50 @@ TEST(SubstitutionFormatterTest, SpanIDFormatter) {
   }
 }
 
+TEST(SubstitutionFormatterTest, TraceSampledFormatter) {
+  StreamInfo::MockStreamInfo stream_info;
+  Http::TestRequestHeaderMapImpl request_header{};
+  Http::TestResponseHeaderMapImpl response_header{};
+  Http::TestResponseTrailerMapImpl response_trailer{};
+  std::string body;
+  HttpFormatterContext formatter_context(&request_header, &response_header, &response_trailer,
+                                         body);
+  TraceSampledFormatter formatter{};
+
+  // Test traced=true cases: Sampling, ClientForced, ServiceForced
+  {
+    EXPECT_CALL(stream_info, healthCheck()).WillRepeatedly(Return(false));
+    EXPECT_CALL(stream_info, traceReason()).WillRepeatedly(Return(Tracing::Reason::Sampling));
+    EXPECT_EQ("true", formatter.formatWithContext(formatter_context, stream_info));
+    EXPECT_THAT(formatter.formatValueWithContext(formatter_context, stream_info),
+                ProtoEq(ValueUtil::stringValue("true")));
+  }
+  {
+    EXPECT_CALL(stream_info, healthCheck()).WillOnce(Return(false));
+    EXPECT_CALL(stream_info, traceReason()).WillOnce(Return(Tracing::Reason::ClientForced));
+    EXPECT_EQ("true", formatter.formatWithContext(formatter_context, stream_info));
+  }
+  {
+    EXPECT_CALL(stream_info, healthCheck()).WillOnce(Return(false));
+    EXPECT_CALL(stream_info, traceReason()).WillOnce(Return(Tracing::Reason::ServiceForced));
+    EXPECT_EQ("true", formatter.formatWithContext(formatter_context, stream_info));
+  }
+
+  // Test traced=false cases: NotTraceable, HealthCheck
+  {
+    EXPECT_CALL(stream_info, healthCheck()).WillRepeatedly(Return(false));
+    EXPECT_CALL(stream_info, traceReason()).WillRepeatedly(Return(Tracing::Reason::NotTraceable));
+    EXPECT_EQ("false", formatter.formatWithContext(formatter_context, stream_info));
+    EXPECT_THAT(formatter.formatValueWithContext(formatter_context, stream_info),
+                ProtoEq(ValueUtil::stringValue("false")));
+  }
+  {
+    // HealthCheck requests should return false regardless of traceReason
+    EXPECT_CALL(stream_info, healthCheck()).WillOnce(Return(true));
+    EXPECT_EQ("false", formatter.formatWithContext(formatter_context, stream_info));
+  }
+}
+
 /**
  * Populate a metadata object with the following test data:
  * "com.test":
