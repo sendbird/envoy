@@ -17,5 +17,6 @@ envoy_cc_test(
         "//source/common/common:random_generator_lib",
         "//source/extensions/request_id/uuid:config",
         "//test/mocks/stream_info:stream_info_mocks",
+        "//test/test_common:simulated_time_system_lib",
     ],
 )
