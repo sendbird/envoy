@@ -5,6 +5,7 @@
 
 #include "test/mocks/common.h"
 #include "test/mocks/stream_info/mocks.h"
+#include "test/test_common/simulated_time_system.h"
 #include "test/test_common/utility.h"
 
 #include "gtest/gtest.h"
@@ -16,24 +17,30 @@ namespace Extensions {
 namespace RequestId {
 
 TEST(UUIDRequestIDExtensionTest, SetRequestID) {
-  testing::StrictMock<Random::MockRandomGenerator> random;
+  testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
 
   {
     // edge_request: true, keep_external_id: false.
 
     Http::TestRequestHeaderMapImpl request_headers;
 
-    // Without request ID.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // Without request ID. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, true, false);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
+    EXPECT_EQ('f', first_request_id[0]); // UUIDv7 request_id marker
+    EXPECT_EQ('7', first_request_id[14]); // UUIDv7 version
 
     // With request ID. Previous one will be overwritten.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("second-request-id"));
     uuid_utils.set(request_headers, true, false);
-    EXPECT_EQ("second-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string second_request_id =
+        std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, second_request_id.length());
+    EXPECT_EQ('f', second_request_id[0]);
+    EXPECT_EQ('7', second_request_id[14]);
   }
 
   {
@@ -41,15 +48,14 @@ TEST(UUIDRequestIDExtensionTest, SetRequestID) {
 
     Http::TestRequestHeaderMapImpl request_headers;
 
-    // Without request ID.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // Without request ID. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, true, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
 
     // With request ID. Previous one will be kept.
-    EXPECT_CALL(random, uuid()).Times(0);
     uuid_utils.set(request_headers, true, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(first_request_id, request_headers.get_(Http::Headers::get().RequestId));
   }
 
   {
@@ -57,15 +63,14 @@ TEST(UUIDRequestIDExtensionTest, SetRequestID) {
 
     Http::TestRequestHeaderMapImpl request_headers;
 
-    // Without request ID.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // Without request ID. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, false, false);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
 
     // With request ID. Previous one will be kept.
-    EXPECT_CALL(random, uuid()).Times(0);
     uuid_utils.set(request_headers, false, false);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(first_request_id, request_headers.get_(Http::Headers::get().RequestId));
   }
 
   {
@@ -73,32 +78,34 @@ TEST(UUIDRequestIDExtensionTest, SetRequestID) {
 
     Http::TestRequestHeaderMapImpl request_headers;
 
-    // Without request ID.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // Without request ID. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, false, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
 
     // With request ID. Previous one will be kept.
-    EXPECT_CALL(random, uuid()).Times(0);
     uuid_utils.set(request_headers, false, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(first_request_id, request_headers.get_(Http::Headers::get().RequestId));
   }
 }
 
 TEST(UUIDRequestIDExtensionTest, SetRequestIDWhenEmpty) {
-  testing::StrictMock<Random::MockRandomGenerator> random;
+  testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
 
   {
     // Request ID not set.
 
     Http::TestRequestHeaderMapImpl request_headers;
 
-    // A new request ID will be set.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // A new request ID will be set. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, false, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
+    EXPECT_EQ('f', first_request_id[0]); // UUIDv7 request_id marker
+    EXPECT_EQ('7', first_request_id[14]); // UUIDv7 version
   }
 
   {
@@ -109,10 +116,12 @@ TEST(UUIDRequestIDExtensionTest, SetRequestIDWhenEmpty) {
         "",
     }};
 
-    // A new request ID will be set.
-    EXPECT_CALL(random, uuid()).WillOnce(Return("first-request-id"));
+    // A new request ID will be set. generateUuidV7() calls random.random() twice.
     uuid_utils.set(request_headers, false, true);
-    EXPECT_EQ("first-request-id", request_headers.get_(Http::Headers::get().RequestId));
+    std::string first_request_id = std::string(request_headers.get_(Http::Headers::get().RequestId));
+    EXPECT_EQ(36, first_request_id.length());
+    EXPECT_EQ('f', first_request_id[0]);
+    EXPECT_EQ('7', first_request_id[14]);
   }
 
   {
@@ -124,7 +133,6 @@ TEST(UUIDRequestIDExtensionTest, SetRequestIDWhenEmpty) {
     }};
 
     // The request ID will be kept.
-    EXPECT_CALL(random, uuid()).Times(0);
     uuid_utils.set(request_headers, false, true);
     EXPECT_EQ("some-request-id", request_headers.get_(Http::Headers::get().RequestId));
   }
@@ -132,8 +140,9 @@ TEST(UUIDRequestIDExtensionTest, SetRequestIDWhenEmpty) {
 
 TEST(UUIDRequestIDExtensionTest, ClearExternalTraceReason) {
   testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
 
   std::string uuid_with_trace_reason = random.uuid_;
 
@@ -147,9 +156,8 @@ TEST(UUIDRequestIDExtensionTest, ClearExternalTraceReason) {
   }};
 
   std::string expected_uuid_with_trace_reason = uuid_with_trace_reason;
-  expected_uuid_with_trace_reason[14] = '4'; // 'b' means NO_TRACE.
+  expected_uuid_with_trace_reason[14] = '7'; // Clear to NO_TRACE (UUIDv7 version bit).
 
-  EXPECT_CALL(random, uuid()).Times(0);
   uuid_utils.set(request_headers, true, true);
 
   // External request ID will be kept but the trace reason will be cleared.
@@ -157,9 +165,10 @@ TEST(UUIDRequestIDExtensionTest, ClearExternalTraceReason) {
 }
 
 TEST(UUIDRequestIDExtensionTest, PreserveRequestIDInResponse) {
-  testing::StrictMock<Random::MockRandomGenerator> random;
+  testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
   Http::TestRequestHeaderMapImpl request_headers;
   Http::TestResponseHeaderMapImpl response_headers;
 
@@ -181,63 +190,77 @@ TEST(UUIDRequestIDExtensionTest, PreserveRequestIDInResponse) {
 }
 
 TEST(UUIDRequestIDExtensionTest, GetRequestIdAndModRequestIDBy) {
-  Random::RandomGeneratorImpl random;
+  testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
   Http::TestRequestHeaderMapImpl request_headers;
 
   EXPECT_FALSE(uuid_utils.get(request_headers));
   EXPECT_FALSE(uuid_utils.getInteger(request_headers).has_value());
 
+  // UUID too short (< 36 chars).
   request_headers.setRequestId("fffffff");
   EXPECT_EQ("fffffff", uuid_utils.get(request_headers).value());
   EXPECT_FALSE(uuid_utils.getInteger(request_headers).has_value());
 
-  request_headers.setRequestId("fffffffz-0012-0110-00ff-0c00400600ff");
-  EXPECT_EQ("fffffffz-0012-0110-00ff-0c00400600ff", uuid_utils.get(request_headers).value());
+  // UUID with invalid hex char 'z' in the last 8 chars (position 28-35).
+  request_headers.setRequestId("fffffffz-0012-0110-00ff-0c00400600fz");
+  EXPECT_EQ("fffffffz-0012-0110-00ff-0c00400600fz", uuid_utils.get(request_headers).value());
   EXPECT_FALSE(uuid_utils.getInteger(request_headers).has_value());
 
+  // getInteger() now uses last 8 hex chars (position 28-35).
+  // UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  //       0       8    13   18   23   28     35
+  //                                   ^^^^^^^^ (last 8 hex chars)
+
+  // "00000000-0000-0000-0000-000000000000" -> last 8 chars = "00000000" = 0
   request_headers.setRequestId("00000000-0000-0000-0000-000000000000");
   EXPECT_EQ("00000000-0000-0000-0000-000000000000", uuid_utils.get(request_headers).value());
   EXPECT_EQ(0, uuid_utils.getInteger(request_headers).value());
 
-  request_headers.setRequestId("00000001-0000-0000-0000-000000000000");
-  EXPECT_EQ("00000001-0000-0000-0000-000000000000", uuid_utils.get(request_headers).value());
+  // "00000001-0000-0000-0000-000000000001" -> last 8 chars = "00000001" = 1
+  request_headers.setRequestId("00000001-0000-0000-0000-000000000001");
+  EXPECT_EQ("00000001-0000-0000-0000-000000000001", uuid_utils.get(request_headers).value());
   EXPECT_EQ(1, uuid_utils.getInteger(request_headers).value());
 
-  request_headers.setRequestId("0000000f-0000-0000-0000-00000000000a");
-  EXPECT_EQ("0000000f-0000-0000-0000-00000000000a", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(15, uuid_utils.getInteger(request_headers).value());
+  // "0000000f-0000-0000-0000-0000000000ff" -> last 8 chars = "000000ff" = 255
+  request_headers.setRequestId("0000000f-0000-0000-0000-0000000000ff");
+  EXPECT_EQ("0000000f-0000-0000-0000-0000000000ff", uuid_utils.get(request_headers).value());
+  EXPECT_EQ(255, uuid_utils.getInteger(request_headers).value());
 
   request_headers.setRequestId("");
   EXPECT_EQ("", uuid_utils.get(request_headers).value());
   EXPECT_FALSE(uuid_utils.getInteger(request_headers).has_value());
 
-  request_headers.setRequestId("000000ff-0000-0000-0000-000000000000");
-  EXPECT_EQ("000000ff-0000-0000-0000-000000000000", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(55, uuid_utils.getInteger(request_headers).value() % 100);
+  // "000000ff-0000-0000-0000-000012345678" -> last 8 chars = "12345678" = 0x12345678
+  request_headers.setRequestId("000000ff-0000-0000-0000-000012345678");
+  EXPECT_EQ("000000ff-0000-0000-0000-000012345678", uuid_utils.get(request_headers).value());
+  EXPECT_EQ(0x12345678, uuid_utils.getInteger(request_headers).value());
 
-  request_headers.setRequestId("000000ff-0000-0000-0000-000000000000");
-  EXPECT_EQ("000000ff-0000-0000-0000-000000000000", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(255, uuid_utils.getInteger(request_headers).value());
-
+  // "a0090100-0012-0110-00ff-0c00400600ff" -> last 8 chars = "400600ff" = 0x400600ff
   request_headers.setRequestId("a0090100-0012-0110-00ff-0c00400600ff");
   EXPECT_EQ("a0090100-0012-0110-00ff-0c00400600ff", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(8, uuid_utils.getInteger(request_headers).value() % 137);
+  EXPECT_EQ(0x400600ff, uuid_utils.getInteger(request_headers).value());
 
+  // "ffffffff-0012-0110-00ff-0c00ffffffff" -> last 8 chars = "ffffffff" = 0xffffffff
+  request_headers.setRequestId("ffffffff-0012-0110-00ff-0c00ffffffff");
+  EXPECT_EQ("ffffffff-0012-0110-00ff-0c00ffffffff", uuid_utils.get(request_headers).value());
+  EXPECT_EQ(0xffffffff, uuid_utils.getInteger(request_headers).value());
+
+  // Test modulo operations for sampling distribution.
+  // "ffffffff-0012-0110-00ff-0c00400600ff" -> last 8 chars = "400600ff" = 0x400600ff = 1073873151
   request_headers.setRequestId("ffffffff-0012-0110-00ff-0c00400600ff");
   EXPECT_EQ("ffffffff-0012-0110-00ff-0c00400600ff", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(95, uuid_utils.getInteger(request_headers).value() % 100);
-
-  request_headers.setRequestId("ffffffff-0012-0110-00ff-0c00400600ff");
-  EXPECT_EQ("ffffffff-0012-0110-00ff-0c00400600ff", uuid_utils.get(request_headers).value());
-  EXPECT_EQ(7295, uuid_utils.getInteger(request_headers).value() % 10000);
+  EXPECT_EQ(1073873151 % 100, uuid_utils.getInteger(request_headers).value() % 100);
+  EXPECT_EQ(1073873151 % 10000, uuid_utils.getInteger(request_headers).value() % 10000);
 }
 
 TEST(UUIDRequestIDExtensionTest, RequestIDModDistribution) {
   Random::RandomGeneratorImpl random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
   Http::TestRequestHeaderMapImpl request_headers;
 
   const int mod = 100;
@@ -246,13 +269,15 @@ TEST(UUIDRequestIDExtensionTest, RequestIDModDistribution) {
   int interesting_samples = 0;
 
   for (int i = 0; i < 500000; ++i) {
-    std::string uuid = random.uuid();
+    // Generate UUIDv7 via uuid_utils.set() instead of random.uuid().
+    uuid_utils.set(request_headers, true, false);
+    std::string uuid = std::string(request_headers.getRequestIdValue());
 
     const char c = uuid[19];
-    ASSERT_TRUE(uuid[14] == '4');                              // UUID version 4 (random)
+    ASSERT_TRUE(uuid[0] == 'f');                               // Request ID marker
+    ASSERT_TRUE(uuid[14] == '7');                              // UUID version 7
     ASSERT_TRUE(c == '8' || c == '9' || c == 'a' || c == 'b'); // UUID variant 1 (RFC4122)
 
-    request_headers.setRequestId(uuid);
     const uint64_t value = uuid_utils.getInteger(request_headers).value() % mod;
 
     if (value < required_percentage) {
@@ -266,18 +291,25 @@ TEST(UUIDRequestIDExtensionTest, RequestIDModDistribution) {
 
 TEST(UUIDRequestIDExtensionTest, DISABLED_benchmark) {
   Random::RandomGeneratorImpl random;
+  Event::SimulatedTimeSystem time_system;
+  UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
+                                    random, time_system);
+  Http::TestRequestHeaderMapImpl request_headers;
 
   for (int i = 0; i < 100000000; ++i) {
-    random.uuid();
+    uuid_utils.set(request_headers, true, false);
   }
 }
 
 TEST(UUIDRequestIDExtensionTest, SetTraceStatus) {
   Random::RandomGeneratorImpl random;
+  Event::SimulatedTimeSystem time_system;
   UUIDRequestIDExtension uuid_utils(envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(),
-                                    random);
+                                    random, time_system);
   Http::TestRequestHeaderMapImpl request_headers;
-  request_headers.setRequestId(random.uuid());
+
+  // Generate UUIDv7 via uuid_utils.set() instead of random.uuid().
+  uuid_utils.set(request_headers, true, false);
 
   EXPECT_EQ(Tracing::Reason::NotTraceable, uuid_utils.getTraceReason(request_headers));
 
@@ -301,11 +333,15 @@ TEST(UUIDRequestIDExtensionTest, SetTraceStatus) {
 
 TEST(UUIDRequestIDExtensionTest, SetTraceStatusPackingDisabled) {
   Random::RandomGeneratorImpl random;
+  Event::SimulatedTimeSystem time_system;
   envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig config;
   config.mutable_pack_trace_reason()->set_value(false);
-  UUIDRequestIDExtension uuid_utils(config, random);
+  UUIDRequestIDExtension uuid_utils(config, random, time_system);
 
-  std::string uuid_with_trace_reason = random.uuid();
+  // Generate UUIDv7 and manually set trace reason marker.
+  Http::TestRequestHeaderMapImpl temp_headers;
+  uuid_utils.set(temp_headers, true, false);
+  std::string uuid_with_trace_reason = std::string(temp_headers.getRequestIdValue());
   uuid_with_trace_reason[14] = 'b'; // 'b' means TRACE_CLIENT.
 
   Http::TestRequestHeaderMapImpl request_headers;
@@ -317,6 +353,38 @@ TEST(UUIDRequestIDExtensionTest, SetTraceStatusPackingDisabled) {
   uuid_utils.setTraceReason(request_headers, Tracing::Reason::Sampling);
   EXPECT_EQ(Tracing::Reason::NotTraceable, uuid_utils.getTraceReason(request_headers));
   EXPECT_EQ(uuid_with_trace_reason, request_headers.getRequestIdValue());
+}
+
+TEST(UUIDRequestIDExtensionTest, GenerateUuidV7Format) {
+  testing::NiceMock<Random::MockRandomGenerator> random;
+  Event::SimulatedTimeSystem time_system;
+  UUIDRequestIDExtension uuid_utils(
+      envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(), random, time_system);
+
+  Http::TestRequestHeaderMapImpl request_headers;
+
+  EXPECT_CALL(random, random()).Times(2).WillRepeatedly(Return(0x123456789ABCDEFULL));
+  uuid_utils.set(request_headers, true, false);
+
+  std::string uuid = std::string(request_headers.getRequestIdValue());
+
+  // Verify UUID length.
+  EXPECT_EQ(36, uuid.length());
+
+  // Verify marker: request_id starts with 'f'.
+  EXPECT_EQ('f', uuid[0]);
+
+  // Verify version: position 14 = '7' (UUIDv7).
+  EXPECT_EQ('7', uuid[14]);
+
+  // Verify variant: position 19 = '8', '9', 'a', or 'b' (RFC 4122).
+  EXPECT_TRUE(uuid[19] == '8' || uuid[19] == '9' || uuid[19] == 'a' || uuid[19] == 'b');
+
+  // Verify UUID format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  EXPECT_EQ('-', uuid[8]);
+  EXPECT_EQ('-', uuid[13]);
+  EXPECT_EQ('-', uuid[18]);
+  EXPECT_EQ('-', uuid[23]);
 }
 
 } // namespace RequestId
