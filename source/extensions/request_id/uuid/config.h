@@ -1,5 +1,6 @@
 #pragma once
 
+#include "envoy/common/time.h"
 #include "envoy/extensions/request_id/uuid/v3/uuid.pb.h"
 #include "envoy/extensions/request_id/uuid/v3/uuid.pb.validate.h"
 #include "envoy/http/request_id_extension.h"
@@ -14,15 +15,16 @@ namespace RequestId {
 class UUIDRequestIDExtension : public Envoy::Http::RequestIDExtension {
 public:
   UUIDRequestIDExtension(const envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig& config,
-                         Random::RandomGenerator& random)
-      : random_(random),
+                         Random::RandomGenerator& random, TimeSource& time_source)
+      : random_(random), time_source_(time_source),
         pack_trace_reason_(PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, pack_trace_reason, true)),
         use_request_id_for_trace_sampling_(
             PROTOBUF_GET_WRAPPED_OR_DEFAULT(config, use_request_id_for_trace_sampling, true)) {}
 
-  static Envoy::Http::RequestIDExtensionSharedPtr defaultInstance(Random::RandomGenerator& random) {
+  static Envoy::Http::RequestIDExtensionSharedPtr
+  defaultInstance(Random::RandomGenerator& random, TimeSource& time_source) {
     return std::make_shared<UUIDRequestIDExtension>(
-        envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(), random);
+        envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig(), random, time_source);
   }
 
   bool packTraceReason() { return pack_trace_reason_; }
@@ -42,7 +44,22 @@ public:
   bool useRequestIdForTraceSampling() const override { return use_request_id_for_trace_sampling_; }
 
 private:
+  /**
+   * Generates a 128-bit request ID following UUIDv7 format (RFC 9562).
+   *
+   * UUIDv7 layout (128 bits):
+   *   [0-47]   48-bit Unix timestamp (milliseconds)
+   *   [48-51]  4-bit version (0111 = 7)
+   *   [52-63]  12-bit rand_a
+   *   [64-65]  2-bit variant (10)
+   *   [66-127] 62-bit rand_b
+   *
+   * @return 36-character UUID string with hyphens.
+   */
+  std::string generateUuidV7();
+
   Envoy::Random::RandomGenerator& random_;
+  Envoy::TimeSource& time_source_;
   const bool pack_trace_reason_;
   const bool use_request_id_for_trace_sampling_;
 
@@ -61,8 +78,10 @@ private:
   // one modified because of client trace.
   static const char TRACE_CLIENT = 'b';
 
-  // Initial value for freshly generated uuid4.
-  static const char NO_TRACE = '4';
+  // Initial value for freshly generated UUIDv4.
+  static const char NO_TRACE_V4 = '4';
+  // Initial value for freshly generated UUIDv7.
+  static const char NO_TRACE_V7 = '7';
 };
 
 // Factory for the UUID request ID extension.
@@ -79,7 +98,8 @@ public:
         MessageUtil::downcastAndValidate<
             const envoy::extensions::request_id::uuid::v3::UuidRequestIdConfig&>(
             config, context.messageValidationVisitor()),
-        context.serverFactoryContext().api().randomGenerator());
+        context.serverFactoryContext().api().randomGenerator(),
+        context.serverFactoryContext().api().timeSource());
   }
 };
 
