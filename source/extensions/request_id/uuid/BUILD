@@ -20,6 +20,7 @@ envoy_cc_extension(
     deps = [
         "//envoy/http:request_id_extension_interface",
         "//envoy/server:request_id_extension_config_interface",
+        "//source/common/common:hex_lib",
         "//source/common/common:random_generator_lib",
         "//source/common/stream_info:stream_id_provider_lib",
         "@envoy_api//envoy/extensions/request_id/uuid/v3:pkg_cc_proto",
