@@ -21,5 +21,11 @@ new_features:
     route read requests to replicas in the same availability zone. Zone discovery is enabled via
     :ref:`enable_zone_discovery <envoy_v3_api_field_extensions.clusters.redis.v3.RedisClusterConfig.enable_zone_discovery>`.
     Note: This feature currently works with Valkey only.
+- area: tls
+  change: |
+    Added TLS certificate compression support (RFC 8879) with brotli, zstd, and zlib algorithms.
+    Compression reduces TLS handshake size, especially beneficial for QUIC where the ServerHello
+    needs to fit in the initial response. Enable via runtime guard
+    ``envoy.reloadable_features.tls_support_certificate_compression`` (defaults to ``false``).
 
 deprecated:
