@@ -95,6 +95,8 @@ private:
 
     uint32_t maxUpstreamUnknownConnections() const override { return 0; }
     bool enableCommandStats() const override { return false; }
+    bool enablePerShardStats() const override { return false; }         // Not needed for health checks
+    bool enablePerShardLatencyStats() const override { return false; }  // Not needed for health checks
     bool connectionRateLimitEnabled() const override { return false; }
     uint32_t connectionRateLimitPerSec() const override { return 0; }
 
