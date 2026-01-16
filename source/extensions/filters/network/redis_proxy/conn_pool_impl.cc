@@ -269,6 +269,52 @@ void InstanceImpl::ThreadLocalPool::drainClients() {
   }
 }
 
+RedisShardStatsSharedPtr
+InstanceImpl::ThreadLocalPool::getOrCreateShardStats(const std::string& host_address) {
+  auto it = shard_stats_map_.find(host_address);
+  if (it != shard_stats_map_.end()) {
+    return it->second.stats_;
+  }
+
+  // Create a sanitized stat name from the host address (replace ':' and '.' with '_')
+  std::string stat_name = host_address;
+  std::replace(stat_name.begin(), stat_name.end(), ':', '_');
+  std::replace(stat_name.begin(), stat_name.end(), '.', '_');
+
+  Stats::ScopeSharedPtr shard_scope = stats_scope_->createScope(fmt::format("shard.{}.", stat_name));
+  auto shard_stats = std::make_shared<RedisShardStats>(RedisShardStats{
+      REDIS_SHARD_STATS(POOL_COUNTER(*shard_scope), POOL_GAUGE(*shard_scope))});
+  // Store both scope and stats to keep the scope alive
+  shard_stats_map_[host_address] = ShardStatsEntry{shard_scope, shard_stats};
+  return shard_stats;
+}
+
+Stats::ScopeSharedPtr
+InstanceImpl::ThreadLocalPool::getShardScope(const std::string& host_address) {
+  auto it = shard_stats_map_.find(host_address);
+  if (it != shard_stats_map_.end()) {
+    return it->second.scope_;
+  }
+  return nullptr;
+}
+
+Stats::Histogram*
+InstanceImpl::ThreadLocalPool::getOrCreateShardLatencyHistogram(const std::string& host_address) {
+  auto it = shard_stats_map_.find(host_address);
+  if (it == shard_stats_map_.end()) {
+    // Create shard stats entry first if it doesn't exist
+    getOrCreateShardStats(host_address);
+    it = shard_stats_map_.find(host_address);
+  }
+
+  if (it->second.latency_histogram_ == nullptr) {
+    // Create the histogram if it doesn't exist
+    it->second.latency_histogram_ = &it->second.scope_->histogramFromString(
+        "upstream_rq_time", Stats::Histogram::Unit::Microseconds);
+  }
+  return it->second.latency_histogram_;
+}
+
 InstanceImpl::ThreadLocalActiveClientPtr&
 InstanceImpl::ThreadLocalPool::threadLocalActiveClient(Upstream::HostConstSharedPtr host) {
   TokenBucketPtr& rate_limiter = cx_rate_limiter_map_[host];
@@ -455,7 +501,22 @@ InstanceImpl::ThreadLocalPool::makeRequestToHost(Upstream::HostConstSharedPtr& h
     }
   }
 
-  pending_requests_.emplace_back(*this, std::move(request), callbacks, host);
+  // Get or create per-shard stats for tracking hot shard usage (if enabled)
+  RedisShardStatsSharedPtr shard_stats = nullptr;
+  Stats::ScopeSharedPtr shard_scope = nullptr;
+  Stats::Histogram* latency_histogram = nullptr;
+  if (config_->enablePerShardStats()) {
+    const std::string host_address = host->address()->asString();
+    shard_stats = getOrCreateShardStats(host_address);
+    shard_scope = getShardScope(host_address);
+  }
+  if (config_->enablePerShardLatencyStats()) {
+    const std::string host_address = host->address()->asString();
+    latency_histogram = getOrCreateShardLatencyHistogram(host_address);
+  }
+
+  pending_requests_.emplace_back(*this, std::move(request), callbacks, host, shard_stats,
+                                 shard_scope, latency_histogram);
   PendingRequest& pending_request = pending_requests_.back();
 
   if (!transaction.active_) {
@@ -518,9 +579,30 @@ void InstanceImpl::ThreadLocalActiveClient::onEvent(Network::ConnectionEvent eve
 InstanceImpl::PendingRequest::PendingRequest(InstanceImpl::ThreadLocalPool& parent,
                                              RespVariant&& incoming_request,
                                              PoolCallbacks& pool_callbacks,
-                                             Upstream::HostConstSharedPtr& host)
+                                             Upstream::HostConstSharedPtr& host,
+                                             RedisShardStatsSharedPtr shard_stats,
+                                             Stats::ScopeSharedPtr shard_scope,
+                                             Stats::Histogram* latency_histogram)
     : parent_(parent), incoming_request_(std::move(incoming_request)),
-      pool_callbacks_(pool_callbacks), host_(host) {}
+      pool_callbacks_(pool_callbacks), host_(host), shard_stats_(std::move(shard_stats)),
+      shard_scope_(std::move(shard_scope)), latency_histogram_(latency_histogram),
+      start_time_(parent.dispatcher_.timeSource().monotonicTime()) {
+  // Track per-shard request metrics and command stats
+  if (shard_stats_) {
+    shard_stats_->upstream_rq_total_.inc();
+    shard_stats_->upstream_rq_active_.inc();
+  }
+  // Extract and track command name for per-shard command stats
+  if (shard_scope_ && parent_.config_->enableCommandStats()) {
+    command_ = parent_.redis_command_stats_->getCommandFromRequest(getRequest(incoming_request_));
+    parent_.redis_command_stats_->updateStatsTotal(*shard_scope_, command_);
+    // Create per-shard per-command latency timer when both command stats and per-shard latency are enabled
+    if (parent_.config_->enablePerShardLatencyStats()) {
+      command_latency_timer_ = parent_.redis_command_stats_->createCommandTimer(
+          *shard_scope_, command_, parent_.dispatcher_.timeSource());
+    }
+  }
+}
 
 InstanceImpl::PendingRequest::~PendingRequest() {
   cache_load_handle_.reset();
@@ -528,6 +610,15 @@ InstanceImpl::PendingRequest::~PendingRequest() {
   if (request_handler_) {
     request_handler_->cancel();
     request_handler_ = nullptr;
+    // Update per-shard stats - treat cancellation as failure
+    if (shard_stats_) {
+      shard_stats_->upstream_rq_active_.dec();
+      shard_stats_->upstream_rq_failure_.inc();
+    }
+    // Update per-shard command stats (failure due to cancellation)
+    if (shard_scope_ && parent_.config_->enableCommandStats()) {
+      parent_.redis_command_stats_->updateStats(*shard_scope_, command_, false);
+    }
     // If we have to cancel the request on the client, then we'll treat this as failure for pool
     // callback
     pool_callbacks_.onFailure();
@@ -536,12 +627,52 @@ InstanceImpl::PendingRequest::~PendingRequest() {
 
 void InstanceImpl::PendingRequest::onResponse(Common::Redis::RespValuePtr&& response) {
   request_handler_ = nullptr;
+  // Update per-shard stats
+  if (shard_stats_) {
+    shard_stats_->upstream_rq_active_.dec();
+    shard_stats_->upstream_rq_success_.inc();
+  }
+  // Update per-shard command stats (success)
+  if (shard_scope_ && parent_.config_->enableCommandStats()) {
+    parent_.redis_command_stats_->updateStats(*shard_scope_, command_, true);
+  }
+  // Record per-shard latency histogram
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
+  }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
+  }
   pool_callbacks_.onResponse(std::move(response));
   parent_.onRequestCompleted();
 }
 
 void InstanceImpl::PendingRequest::onFailure() {
   request_handler_ = nullptr;
+  // Update per-shard stats
+  if (shard_stats_) {
+    shard_stats_->upstream_rq_active_.dec();
+    shard_stats_->upstream_rq_failure_.inc();
+  }
+  // Update per-shard command stats (failure)
+  if (shard_scope_ && parent_.config_->enableCommandStats()) {
+    parent_.redis_command_stats_->updateStats(*shard_scope_, command_, false);
+  }
+  // Record per-shard latency histogram (even for failures)
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
+  }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
+  }
   pool_callbacks_.onFailure();
   parent_.refresh_manager_->onFailure(parent_.cluster_name_);
   parent_.onRequestCompleted();
@@ -640,6 +771,26 @@ void InstanceImpl::PendingRequest::doRedirection(Common::Redis::RespValuePtr&& v
 void InstanceImpl::PendingRequest::cancel() {
   request_handler_->cancel();
   request_handler_ = nullptr;
+  // Update per-shard stats - treat cancellation as failure
+  if (shard_stats_) {
+    shard_stats_->upstream_rq_active_.dec();
+    shard_stats_->upstream_rq_failure_.inc();
+  }
+  // Update per-shard command stats (failure due to cancellation)
+  if (shard_scope_ && parent_.config_->enableCommandStats()) {
+    parent_.redis_command_stats_->updateStats(*shard_scope_, command_, false);
+  }
+  // Record per-shard latency histogram (even for cancellations)
+  if (latency_histogram_ != nullptr) {
+    const auto end_time = parent_.dispatcher_.timeSource().monotonicTime();
+    const auto latency_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        end_time - start_time_).count();
+    latency_histogram_->recordValue(latency_us);
+  }
+  // Complete per-shard per-command latency timer
+  if (command_latency_timer_) {
+    command_latency_timer_->complete();
+  }
   parent_.onRequestCompleted();
 }
 
