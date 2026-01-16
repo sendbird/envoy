@@ -294,6 +294,8 @@ private:
     std::chrono::milliseconds bufferFlushTimeoutInMs() const override { return buffer_timeout_; }
     uint32_t maxUpstreamUnknownConnections() const override { return 0; }
     bool enableCommandStats() const override { return true; }
+    bool enablePerShardStats() const override { return false; }         // Not needed for discovery
+    bool enablePerShardLatencyStats() const override { return false; }  // Not needed for discovery
     bool connectionRateLimitEnabled() const override { return false; }
     uint32_t connectionRateLimitPerSec() const override { return 0; }
     // For any readPolicy other than Primary, the RedisClientFactory will send a READONLY command
