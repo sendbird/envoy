@@ -925,5 +925,11 @@ new_features:
     ``--config=openssl``. HTTP/3 (QUIC) is disabled for OpenSSL builds. Note that OpenSSL builds are
     not currently covered by the `Envoy security policy <https://github.com/envoyproxy/envoy/blob/main/SECURITY.md>`_.
     See :repo:`bazel/SSL.md <bazel/SSL.md>` for details.
+- area: tls
+  change: |
+    Added TLS certificate compression support (RFC 8879) with brotli, zstd, and zlib algorithms.
+    Compression reduces TLS handshake size, especially beneficial for QUIC where the ServerHello
+    needs to fit in the initial response. Enable via runtime guard
+    ``envoy.reloadable_features.tls_support_certificate_compression`` (defaults to ``false``).
 
 deprecated:
