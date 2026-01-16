@@ -203,7 +203,7 @@ private:
               std::make_shared<envoy::config::core::v3::Metadata>(
                   parent.localityLbEndpoint().metadata()),
               parent.lbEndpoint().load_balancing_weight().value(),
-              makeLocalityWithZone(parent.localityLbEndpoint().locality(), zone),
+              *makeLocalityWithZone(parent.localityLbEndpoint().locality(), zone),
               parent.lbEndpoint().endpoint().health_check_config(),
               parent.localityLbEndpoint().priority(), parent.lbEndpoint().health_status()),
           primary_(primary) {}
