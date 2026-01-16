@@ -194,6 +194,16 @@ public:
   virtual bool enableCommandStats() const PURE;
 
   /**
+   * @return when enabled, per-shard statistics will be recorded for tracking hot shard usage.
+   */
+  virtual bool enablePerShardStats() const PURE;
+
+  /**
+   * @return when enabled, per-shard latency histograms will be recorded.
+   */
+  virtual bool enablePerShardLatencyStats() const PURE;
+
+  /**
    * @return the read policy the proxy should use.
    */
   virtual ReadPolicy readPolicy() const PURE;
