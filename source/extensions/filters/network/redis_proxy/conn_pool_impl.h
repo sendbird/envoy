@@ -7,8 +7,10 @@
 #include <string>
 #include <vector>
 
+#include "envoy/common/time.h"
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 #include "envoy/stats/stats_macros.h"
+#include "envoy/stats/timespan.h"
 #include "envoy/thread_local/thread_local.h"
 #include "envoy/upstream/cluster_manager.h"
 
@@ -47,6 +49,32 @@ namespace ConnPool {
 
 struct RedisClusterStats {
   REDIS_CLUSTER_STATS(GENERATE_COUNTER_STRUCT)
+};
+
+/**
+ * Per-shard statistics for tracking hot shard usage.
+ * These metrics help identify which shards are receiving more traffic.
+ */
+#define REDIS_SHARD_STATS(COUNTER, GAUGE)                                                          \
+  COUNTER(upstream_rq_total)                                                                       \
+  COUNTER(upstream_rq_success)                                                                     \
+  COUNTER(upstream_rq_failure)                                                                     \
+  GAUGE(upstream_rq_active, Accumulate)
+
+struct RedisShardStats {
+  REDIS_SHARD_STATS(GENERATE_COUNTER_STRUCT, GENERATE_GAUGE_STRUCT)
+};
+
+using RedisShardStatsSharedPtr = std::shared_ptr<RedisShardStats>;
+
+/**
+ * Struct to hold per-shard stats and the scope they belong to.
+ * The scope must be kept alive for the stats to remain valid.
+ */
+struct ShardStatsEntry {
+  Stats::ScopeSharedPtr scope_;
+  RedisShardStatsSharedPtr stats_;
+  Stats::Histogram* latency_histogram_{nullptr};  // Per-shard latency histogram (optional)
 };
 
 class DoNothingPoolCallbacks : public PoolCallbacks {
@@ -119,7 +147,9 @@ private:
         public Extensions::Common::DynamicForwardProxy::DnsCache::LoadDnsCacheEntryCallbacks,
         public Logger::Loggable<Logger::Id::redis> {
     PendingRequest(ThreadLocalPool& parent, RespVariant&& incoming_request,
-                   PoolCallbacks& pool_callbacks, Upstream::HostConstSharedPtr& host);
+                   PoolCallbacks& pool_callbacks, Upstream::HostConstSharedPtr& host,
+                   RedisShardStatsSharedPtr shard_stats, Stats::ScopeSharedPtr shard_scope,
+                   Stats::Histogram* latency_histogram);
     ~PendingRequest() override;
 
     // Common::Redis::Client::ClientCallbacks
@@ -148,6 +178,12 @@ private:
     bool ask_redirection_;
     Extensions::Common::DynamicForwardProxy::DnsCache::LoadDnsCacheEntryHandlePtr
         cache_load_handle_;
+    RedisShardStatsSharedPtr shard_stats_;
+    Stats::ScopeSharedPtr shard_scope_;  // Scope for per-shard command stats
+    Stats::StatName command_;            // Command name for per-shard command stats
+    Stats::Histogram* latency_histogram_{nullptr};  // Per-shard latency histogram
+    MonotonicTime start_time_;           // Request start time for latency tracking
+    Stats::TimespanPtr command_latency_timer_;  // Per-shard per-command latency timer
   };
 
   struct ThreadLocalPool : public ThreadLocal::ThreadLocalObject,
@@ -180,6 +216,9 @@ private:
     void onHostsAdded(const std::vector<Upstream::HostSharedPtr>& hosts_added);
     void onHostsRemoved(const std::vector<Upstream::HostSharedPtr>& hosts_removed);
     void drainClients();
+    RedisShardStatsSharedPtr getOrCreateShardStats(const std::string& host_address);
+    Stats::ScopeSharedPtr getShardScope(const std::string& host_address);
+    Stats::Histogram* getOrCreateShardLatencyHistogram(const std::string& host_address);
 
     // Upstream::ClusterUpdateCallbacks
     void onClusterAddOrUpdate(absl::string_view cluster_name,
@@ -222,6 +261,8 @@ private:
     absl::optional<Common::Redis::AwsIamAuthenticator::AwsIamAuthenticatorSharedPtr>
         aws_iam_authenticator_;
     absl::optional<envoy::extensions::filters::network::redis_proxy::v3::AwsIam> aws_iam_config_;
+    // Per-shard stats map keyed by host address (e.g., "10.0.0.1:6379")
+    absl::node_hash_map<std::string, ShardStatsEntry> shard_stats_map_;
   };
 
   const std::string cluster_name_;
