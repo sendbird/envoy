@@ -134,7 +134,7 @@ void EnvoyQuicProofSource::updateFilterChainManager(
 }
 
 void EnvoyQuicProofSource::OnNewSslCtx(SSL_CTX* ssl_ctx) {
-  CertCompression::registerSslContext(ssl_ctx);
+  CertCompression::registerSslContext(ssl_ctx, &stats_scope_);
 
   // Try to set up keylog callback for QUIC SSL contexts
   setupQuicKeylogCallback(ssl_ctx);
@@ -184,15 +184,15 @@ void EnvoyQuicProofSource::quicKeylogCallback(const SSL* ssl, const char* line) 
         try {
           // Convert QUIC addresses back to Envoy addresses for the bridge
           std::string server_addr_str = absl::StrCat(
-              keylog_info.server_address.host().ToString(), ":", 
+              keylog_info.server_address.host().ToString(), ":",
               keylog_info.server_address.port());
           std::string client_addr_str = absl::StrCat(
-              keylog_info.client_address.host().ToString(), ":", 
+              keylog_info.client_address.host().ToString(), ":",
               keylog_info.client_address.port());
-          
-          Network::Address::InstanceConstSharedPtr local_addr = 
+
+          Network::Address::InstanceConstSharedPtr local_addr =
               Network::Utility::parseInternetAddressAndPortNoThrow(server_addr_str);
-          Network::Address::InstanceConstSharedPtr remote_addr = 
+          Network::Address::InstanceConstSharedPtr remote_addr =
               Network::Utility::parseInternetAddressAndPortNoThrow(client_addr_str);
 
           if (local_addr && remote_addr) {
@@ -225,11 +225,11 @@ void EnvoyQuicProofSource::quicKeylogCallback(const SSL* ssl, const char* line) 
 }
 
 void EnvoyQuicProofSource::QuicKeylogBridge::writeKeylog(
-    const Ssl::ContextConfig& config, 
+    const Ssl::ContextConfig& config,
     const Network::Address::Instance& local_addr,
-    const Network::Address::Instance& remote_addr, 
+    const Network::Address::Instance& remote_addr,
     const char* line) {
-  
+
   const std::string& keylog_path = config.tlsKeyLogPath();
   if (keylog_path.empty()) {
     return;
@@ -238,12 +238,12 @@ void EnvoyQuicProofSource::QuicKeylogBridge::writeKeylog(
   // Check address filtering
   const auto& local_ip_list = config.tlsKeyLogLocal();
   const auto& remote_ip_list = config.tlsKeyLogRemote();
-  
+
   bool local_match = (local_ip_list.getIpListSize() == 0 || local_ip_list.contains(local_addr));
   bool remote_match = (remote_ip_list.getIpListSize() == 0 || remote_ip_list.contains(remote_addr));
-  
+
   if (!local_match || !remote_match) {
-    ENVOY_LOG(debug, "QUIC keylog filtered out by address match (local={}, remote={})", 
+    ENVOY_LOG(debug, "QUIC keylog filtered out by address match (local={}, remote={})",
              local_match, remote_match);
     return;
   }
@@ -253,13 +253,13 @@ void EnvoyQuicProofSource::QuicKeylogBridge::writeKeylog(
     auto& access_log_manager = config.accessLogManager();
     auto file_or_error = access_log_manager.createAccessLog(
         Filesystem::FilePathAndType{Filesystem::DestinationType::File, keylog_path});
-    
+
     if (file_or_error.ok()) {
       auto keylog_file = file_or_error.value();
       keylog_file->write(absl::StrCat(line, "\n"));
       ENVOY_LOG(debug, "QUIC keylog written via bridge to {}: {}", keylog_path, line);
     } else {
-      ENVOY_LOG(warn, "Failed to create keylog file {}: {}", keylog_path, 
+      ENVOY_LOG(warn, "Failed to create keylog file {}: {}", keylog_path,
                file_or_error.status().message());
     }
   } catch (const std::exception& e) {
@@ -273,7 +273,7 @@ int EnvoyQuicProofSource::sslSocketIndex() {
   return ssl_socket_index;
 }
 
-void EnvoyQuicProofSource::storeKeylogInfo(const Network::FilterChain& filter_chain, 
+void EnvoyQuicProofSource::storeKeylogInfo(const Network::FilterChain& filter_chain,
                                           std::shared_ptr<const Ssl::ContextConfig> config,
                                           const quic::QuicSocketAddress& server_address,
                                           const quic::QuicSocketAddress& client_address) const {
