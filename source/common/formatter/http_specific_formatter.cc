@@ -231,14 +231,14 @@ bool isTraced(const StreamInfo::StreamInfo& stream_info) {
 } // namespace
 
 absl::optional<std::string>
-TraceSampledFormatter::formatWithContext(const HttpFormatterContext&,
-                                         const StreamInfo::StreamInfo& stream_info) const {
+TraceSampledFormatter::format(const Context&,
+                              const StreamInfo::StreamInfo& stream_info) const {
   return isTraced(stream_info) ? "true" : "false";
 }
 
 Protobuf::Value
-TraceSampledFormatter::formatValueWithContext(const HttpFormatterContext&,
-                                              const StreamInfo::StreamInfo& stream_info) const {
+TraceSampledFormatter::formatValue(const Context&,
+                                   const StreamInfo::StreamInfo& stream_info) const {
   return ValueUtil::stringValue(isTraced(stream_info) ? "true" : "false");
 }
 
