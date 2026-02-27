@@ -160,11 +160,10 @@ public:
  */
 class TraceSampledFormatter : public FormatterProvider {
 public:
-  absl::optional<std::string>
-  formatWithContext(const HttpFormatterContext& context,
-                    const StreamInfo::StreamInfo& stream_info) const override;
-  Protobuf::Value formatValueWithContext(const HttpFormatterContext& context,
-                                         const StreamInfo::StreamInfo& stream_info) const override;
+  absl::optional<std::string> format(const Context& context,
+                                     const StreamInfo::StreamInfo& stream_info) const override;
+  Protobuf::Value formatValue(const Context& context,
+                              const StreamInfo::StreamInfo& stream_info) const override;
 };
 
 class GrpcStatusFormatter : public FormatterProvider, HeaderFormatter {
