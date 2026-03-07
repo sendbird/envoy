@@ -7,10 +7,8 @@
 
 #include "envoy/ssl/tls_certificate_config.h"
 
-#include "source/common/quic/cert_compression.h"
 #include "source/common/quic/envoy_quic_utils.h"
 #include "source/common/quic/quic_io_handle_wrapper.h"
-#include "source/common/runtime/runtime_features.h"
 #include "source/common/stream_info/stream_info_impl.h"
 #include "source/common/tls/context_config_impl.h"
 #include "source/common/network/utility.h"
@@ -134,7 +132,7 @@ void EnvoyQuicProofSource::updateFilterChainManager(
 }
 
 void EnvoyQuicProofSource::OnNewSslCtx(SSL_CTX* ssl_ctx) {
-  CertCompression::registerSslContext(ssl_ctx);
+  registerCertCompression(ssl_ctx);
 
   // Try to set up keylog callback for QUIC SSL contexts
   setupQuicKeylogCallback(ssl_ctx);

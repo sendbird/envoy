@@ -330,58 +330,12 @@ removed_config_or_runtime:
     and legacy code path.
 
 new_features:
-- area: redis
-  change: |
-    Added zone-aware routing support for Redis Cluster proxy. New read policies
-    ``LOCAL_ZONE_AFFINITY`` and ``LOCAL_ZONE_AFFINITY_REPLICAS_AND_PRIMARY`` route read requests
-    to replicas in the same availability zone. Zone discovery is enabled via
-    :ref:`enable_zone_discovery
-    <envoy_v3_api_field_extensions.clusters.redis.v3.RedisClusterConfig.enable_zone_discovery>`.
-    Note: This feature currently works with Valkey only.
-- area: overload_manager
-  change: |
-    Added :ref:`ShrinkHeapConfig <envoy_v3_api_msg_config.overload.v3.ShrinkHeapConfig>` typed
-    configuration for the ``envoy.overload_actions.shrink_heap`` overload action. This allows
-    operators to configure the timer interval (``timer_interval``, minimum 1s, default 10s) and
-    the memory release threshold (``max_unfreed_memory_bytes``, default 100MB) passed to
-    ``tcmalloc::MallocExtension::ReleaseMemoryToSystem()``.
-- area: dns_resolver
-  change: |
-    Added :ref:`HickoryDnsResolverConfig
-    <envoy_v3_api_msg_extensions.network.dns_resolver.hickory.v3.HickoryDnsResolverConfig>`, a new DNS
-    resolver using the `Hickory DNS <https://github.com/hickory-dns/hickory-dns>`_ library.
-- area: dynamic_modules
-  change: |
-    Added :ref:`tracer <envoy_v3_api_msg_extensions.tracers.dynamic_modules.v3.DynamicModuleTracer>`
-    support for dynamic modules, enabling custom distributed tracing backends to be implemented
-    in dynamic modules.
-- area: dynamic_modules
-  change: |
-    Added upstream HTTP TCP bridge extension for dynamic modules. This enables modules to transform
-    HTTP requests into raw TCP data for upstream connections and convert TCP responses back into HTTP
-    responses via explicit send callbacks. See :ref:`envoy.upstreams.http.dynamic_modules
-    <envoy_v3_api_msg_extensions.upstreams.http.dynamic_modules.v3.Config>`.
-- area: filters
-  change: |
-    Added filters to update the filter state in :ref:`a listener filter <config_listener_filters_set_filter_state>`.
-- area: tls
-  change: |
-    Added a per-connection filter state object to select a workload trust domain in the SPIFFE validator in
-    the multi-tenant deployments.
 - area: tls
   change: |
     Extended TLS certificate compression (RFC 8879): added brotli to QUIC (which already supported zlib),
     and added brotli and zlib to TCP TLS. Controlled by runtime flag
     ``envoy.reloadable_features.tls_certificate_compression_brotli`` (defaults to ``true``).
     When disabled, QUIC retains zlib-only compression, while TCP TLS has no compression.
-- area: tls
-  change: |
-    Exposed the SHA-256 fingerprint and serial number of the verified issuer (CA) certificate from
-    the validated downstream mTLS peer certificate chain. Accessible via the
-    ``%DOWNSTREAM_PEER_ISSUER_FINGERPRINT_256%`` and ``%DOWNSTREAM_PEER_ISSUER_SERIAL%``
-    :ref:`access log formatters <config_access_log_format>`, and via the
-    ``sha256PeerCertificateIssuerDigest()`` and ``serialNumberPeerCertificateIssuer()`` methods on
-    :ref:`downstreamSslConnection() <config_http_filters_lua_ssl_socket_info>` in the Lua filter.
 - area: dynamic_modules
   change: |
     Added custom metrics (counters, gauges, histograms) support to load balancer dynamic modules.
