@@ -271,7 +271,7 @@ envoy_cc_library(
         "//envoy/ssl:context_config_interface",
         "//source/common/common:assert_lib",
         "//source/common/common:logger_lib",
-        "@brotli//:brotlidec",
-        "@brotli//:brotlienc",
+        "@org_brotli//:brotlidec",
+        "@org_brotli//:brotlienc",
     ],
 )
