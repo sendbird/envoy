@@ -175,7 +175,7 @@ RedisClusterLoadBalancerFactory::RedisClusterLoadBalancer::chooseHost(
       }
     case NetworkFilters::Common::Redis::Client::ReadPolicy::Any:
       return chooseRandomHost(shard->allHosts(), random_);
-    case NetworkFilters::Common::Redis::Client::ReadPolicy::AzAffinity: {
+    case NetworkFilters::Common::Redis::Client::ReadPolicy::LocalZoneAffinity: {
       // Spread read requests between replicas in the same AZ in round robin.
       // Falls back to other replicas or primary if needed.
       const std::string& client_zone = redis_context->clientZone();
@@ -194,7 +194,7 @@ RedisClusterLoadBalancerFactory::RedisClusterLoadBalancer::chooseHost(
       }
       return shard->primary();
     }
-    case NetworkFilters::Common::Redis::Client::ReadPolicy::AzAffinityReplicasAndPrimary: {
+    case NetworkFilters::Common::Redis::Client::ReadPolicy::LocalZoneAffinityReplicasAndPrimary: {
       // Spread read requests among nodes within the client's AZ in round robin,
       // prioritizing: local replicas → local primary → any replica → primary.
       const std::string& client_zone = redis_context->clientZone();
