@@ -945,7 +945,8 @@ TEST_F(RedisClusterLoadBalancerTest, LocalZoneAffinityEmptyClientZone) {
   };
   validateAssignment(hosts, expected_assignments, true,
                      NetworkFilters::Common::Redis::Client::ReadPolicy::LocalZoneAffinity, "");
-||||||| parent of 36be96a308 (redis: Support eval_ro, evalsha_ro)
+}
+
 TEST_F(RedisLoadBalancerContextImplTest, ReadOnlyCommand) {
   std::vector<NetworkFilters::Common::Redis::RespValue> eval_ro_foo(4);
   eval_ro_foo[0].type(NetworkFilters::Common::Redis::RespType::BulkString);
