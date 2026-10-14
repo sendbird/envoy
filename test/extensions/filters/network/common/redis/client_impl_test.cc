@@ -193,6 +193,10 @@ class ConfigBufferSizeGTSingleRequest : public Config {
   ReadPolicy readPolicy() const override { return ReadPolicy::Primary; }
   bool connectionRateLimitEnabled() const override { return false; }
   uint32_t connectionRateLimitPerSec() const override { return 0; }
+  // Added by "Add per-shard Redis proxy metrics" (0258881d), which updated
+  // source/ only and left these subclasses abstract.
+  bool enablePerShardStats() const override { return false; }
+  bool enablePerShardLatencyStats() const override { return false; }
 };
 
 TEST_F(RedisClientImplTest, BatchWithTimerFiring) {
@@ -401,6 +405,13 @@ class ConfigEnableCommandStats : public Config {
   bool enableCommandStats() const override { return true; }
   bool connectionRateLimitEnabled() const override { return false; }
   uint32_t connectionRateLimitPerSec() const override { return 0; }
+  // Added by "Add per-shard Redis proxy metrics" (0258881d), which updated
+  // source/ only and left these subclasses abstract.
+  // false even here: this fixture's tests assert exact counter values, and
+  // switching a feature on while making the class concrete would change what
+  // they measure.
+  bool enablePerShardStats() const override { return false; }
+  bool enablePerShardLatencyStats() const override { return false; }
 };
 
 void initializeRedisSimpleCommand(Common::Redis::RespValue* request, std::string command_name,
@@ -841,6 +852,10 @@ class ConfigOutlierDisabled : public Config {
   bool enableCommandStats() const override { return false; }
   bool connectionRateLimitEnabled() const override { return false; }
   uint32_t connectionRateLimitPerSec() const override { return 0; }
+  // Added by "Add per-shard Redis proxy metrics" (0258881d), which updated
+  // source/ only and left these subclasses abstract.
+  bool enablePerShardStats() const override { return false; }
+  bool enablePerShardLatencyStats() const override { return false; }
 };
 
 TEST_F(RedisClientImplTest, OutlierDisabled) {
