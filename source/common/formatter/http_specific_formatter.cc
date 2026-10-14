@@ -240,7 +240,7 @@ bool isTraced(const StreamInfo::StreamInfo& stream_info) {
 }
 } // namespace
 
-absl::optional<std::string>
+std::optional<std::string>
 TraceSampledFormatter::format(const Context&,
                               const StreamInfo::StreamInfo& stream_info) const {
   return isTraced(stream_info) ? "true" : "false";
