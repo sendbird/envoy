@@ -160,7 +160,7 @@ public:
  */
 class TraceSampledFormatter : public FormatterProvider {
 public:
-  absl::optional<std::string> format(const Context& context,
+  std::optional<std::string> format(const Context& context,
                                      const StreamInfo::StreamInfo& stream_info) const override;
   Protobuf::Value formatValue(const Context& context,
                               const StreamInfo::StreamInfo& stream_info) const override;
