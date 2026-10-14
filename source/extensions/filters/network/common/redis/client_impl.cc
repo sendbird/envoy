@@ -298,7 +298,36 @@ void ClientImpl::onEvent(Network::ConnectionEvent event) {
 }
 
 void ClientImpl::onRespValue(RespValuePtr&& value) {
-  ASSERT(!pending_requests_.empty());
+  // Every frame from upstream is assumed to answer a request we sent, and the
+  // rest of this function reads pending_requests_.front() to find it. Pub/sub
+  // breaks that assumption: once a connection is subscribed, the server pushes
+  // messages that answer nothing, so the queue can be empty here.
+  //
+  // Reading front() on an empty std::list is undefined, and in release builds it
+  // crashes several different ways depending on what gets touched first --
+  // PendingRequest::command_ is a non-owning Stats::StatName, so with command
+  // stats on it reaches a freed symbol and RELEASE_ASSERT in
+  // SymbolTable::fromSymbol aborts; with command stats off the timer and
+  // callback references fault instead. All of them are this one missing check.
+  //
+  // Upstream envoy cannot reach this: its supported-command lists have no
+  // subscribe, so the splitter rejects the command before a subscription can
+  // exist (see envoyproxy/envoy#38492 and #46354, both still unresolved). Our
+  // fork added those commands, so the path is only reachable here. Dropping the
+  // frame keeps the connection alive and is the conservative half of a fix;
+  // actually delivering pushed messages downstream needs RESP3 Push support,
+  // which this decoder does not have (RespType has no Push).
+  if (pending_requests_.empty()) {
+    ENVOY_LOG(debug, "redis: discarding unsolicited upstream frame: {}", value->toString());
+    // Counted as a protocol error because that is what it is from this client's
+    // point of view -- a frame it has no way to attribute. Reusing the existing
+    // counter (already used for decoder errors a few lines up) keeps the drop
+    // visible in the dashboards operators already watch, rather than adding a
+    // stat nobody has an alert on.
+    host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
+    return;
+  }
+
   PendingRequest& request = pending_requests_.front();
   const bool canceled = request.canceled_;
 

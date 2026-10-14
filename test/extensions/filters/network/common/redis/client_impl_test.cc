@@ -340,6 +340,53 @@ TEST_F(RedisClientImplTest, Basic) {
   client_->close();
 }
 
+// Regression tests for CPLAT-12791: a pub/sub message pushed by the server
+// answers no request, so onRespValue can run with pending_requests_ empty. Both
+// variants crash without the guard in ClientImpl::onRespValue -- with command
+// stats on, PendingRequest::command_ is a non-owning Stats::StatName pointing at
+// a freed symbol and RELEASE_ASSERT in SymbolTable::fromSymbol aborts; with them
+// off, the timer and callback references fault instead. Both are covered because
+// disabling command stats was measured NOT to be a workaround.
+TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithNoPendingRequest) {
+  InSequence s;
+
+  setup();
+  client_->initialize(auth_username_, auth_password_);
+
+  Common::Redis::RespValue request1;
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  EXPECT_NE(nullptr, client_->makeRequest(request1, callbacks1));
+
+  onConnected();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    InSequence s2;
+
+    // Drain the only pending request, as a SUBSCRIBE ack would.
+    Common::Redis::RespValuePtr ack(new Common::Redis::RespValue());
+    EXPECT_CALL(callbacks1, onResponse_(Ref(ack)));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(std::move(ack));
+
+    // Now the server pushes a message. Nothing is pending, so no callback may
+    // fire and the frame is counted as a protocol error rather than crashing.
+    Common::Redis::RespValuePtr pushed(new Common::Redis::RespValue());
+    callbacks_->onRespValue(std::move(pushed));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
+}
+
 class ConfigEnableCommandStats : public Config {
   bool disableOutlierEvents() const override { return false; }
   std::chrono::milliseconds opTimeout() const override { return std::chrono::milliseconds(25); }
@@ -501,6 +548,48 @@ TEST_F(RedisClientImplTest, CommandStatsEnabledTwoRequests) {
   }));
 
   upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
+}
+
+// The command-stats half of CPLAT-12791. Separate from the no-stats case because
+// the two take different crash paths: here PendingRequest::command_ has been
+// popped and its Stats::StatName no longer resolves, so updateStats aborts in
+// SymbolTable::fromSymbol.
+TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithCommandStatsEnabled) {
+  InSequence s;
+
+  setup(std::make_shared<ConfigEnableCommandStats>());
+  client_->initialize(auth_username_, auth_password_);
+
+  Common::Redis::RespValue request1;
+  initializeRedisSimpleCommand(&request1, "subscribe", "channel");
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  EXPECT_NE(nullptr, client_->makeRequest(request1, callbacks1));
+
+  onConnected();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    InSequence s2;
+
+    Common::Redis::RespValuePtr ack(new Common::Redis::RespValue());
+    EXPECT_CALL(callbacks1, onResponse_(Ref(ack)));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(std::move(ack));
+
+    Common::Redis::RespValuePtr pushed(new Common::Redis::RespValue());
+    callbacks_->onRespValue(std::move(pushed));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
 
   EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
   EXPECT_CALL(*connect_or_op_timer_, disableTimer());
