@@ -344,14 +344,11 @@ TEST_F(RedisClientImplTest, Basic) {
   client_->close();
 }
 
-// Regression tests for CPLAT-12791: a pub/sub message pushed by the server
-// answers no request, so onRespValue can run with pending_requests_ empty. Both
-// variants crash without the guard in ClientImpl::onRespValue -- with command
-// stats on, PendingRequest::command_ is a non-owning Stats::StatName pointing at
-// a freed symbol and RELEASE_ASSERT in SymbolTable::fromSymbol aborts; with them
-// off, the timer and callback references fault instead. Both are covered because
-// disabling command stats was measured NOT to be a workaround.
-TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithNoPendingRequest) {
+// Backport of upstream's UnsolicitedReplyIsDropped (envoyproxy/envoy#48205), adapted to this pin.
+// Asserts more than "it does not crash": the connection stays open, no protocol error is counted
+// because the guard only logs, and a subsequent request still completes -- the surplus reply must
+// not have consumed the next genuine reply's slot in pending_requests_.
+TEST_F(RedisClientImplTest, UnsolicitedReplyIsDropped) {
   InSequence s;
 
   setup();
@@ -361,30 +358,51 @@ TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithNoPendingRequest) {
   MockClientCallbacks callbacks1;
   EXPECT_CALL(*encoder_, encode(Ref(request1), _));
   EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
-  EXPECT_NE(nullptr, client_->makeRequest(request1, callbacks1));
+  client_->makeRequest(request1, callbacks1);
 
   onConnected();
 
   Buffer::OwnedImpl fake_data;
   EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
-    InSequence s2;
-
-    // Drain the only pending request, as a SUBSCRIBE ack would.
-    Common::Redis::RespValuePtr ack(new Common::Redis::RespValue());
-    EXPECT_CALL(callbacks1, onResponse_(Ref(ack)));
+    Common::Redis::RespValuePtr response1(new Common::Redis::RespValue());
+    EXPECT_CALL(callbacks1, onResponse_(Ref(response1)));
     EXPECT_CALL(*connect_or_op_timer_, disableTimer());
     EXPECT_CALL(host_->outlier_detector_,
                 putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
-    callbacks_->onRespValue(std::move(ack));
-
-    // Now the server pushes a message. Nothing is pending, so no callback may
-    // fire and the frame is counted as a protocol error rather than crashing.
-    Common::Redis::RespValuePtr pushed(new Common::Redis::RespValue());
-    callbacks_->onRespValue(std::move(pushed));
+    callbacks_->onRespValue(std::move(response1));
   }));
   upstream_read_filter_->onData(fake_data, false);
 
-  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  // Nothing is pending now. Without the guard this reads the list sentinel as a
+  // PendingRequest and crashes in release builds.
+  Buffer::OwnedImpl unsolicited_data;
+  EXPECT_CALL(*decoder_, decode(Ref(unsolicited_data)))
+      .WillOnce(Invoke([&](Buffer::Instance&) -> void {
+        callbacks_->onRespValue(std::make_unique<Common::Redis::RespValue>());
+      }));
+  upstream_read_filter_->onData(unsolicited_data, false);
+
+  EXPECT_EQ(Network::Connection::State::Open, upstream_connection_->state());
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  // The connection is still usable, and the dropped frame did not shift the queue.
+  Common::Redis::RespValue request2;
+  MockClientCallbacks callbacks2;
+  EXPECT_CALL(*encoder_, encode(Ref(request2), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  EXPECT_CALL(*connect_or_op_timer_, enableTimer(_, _));
+  client_->makeRequest(request2, callbacks2);
+
+  Buffer::OwnedImpl fake_data2;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data2))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    Common::Redis::RespValuePtr response2(new Common::Redis::RespValue());
+    EXPECT_CALL(callbacks2, onResponse_(Ref(response2)));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(std::move(response2));
+  }));
+  upstream_read_filter_->onData(fake_data2, false);
 
   EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
   EXPECT_CALL(*connect_or_op_timer_, disableTimer());
@@ -565,11 +583,12 @@ TEST_F(RedisClientImplTest, CommandStatsEnabledTwoRequests) {
   client_->close();
 }
 
-// The command-stats half of CPLAT-12791. Separate from the no-stats case because
-// the two take different crash paths: here PendingRequest::command_ has been
-// popped and its Stats::StatName no longer resolves, so updateStats aborts in
-// SymbolTable::fromSymbol.
-TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithCommandStatsEnabled) {
+// Kept in addition to the upstream-shaped test above, because this pin takes a
+// different crash path with command stats on: PendingRequest::command_ is a
+// non-owning Stats::StatName and, once popped, updateStats aborts in
+// SymbolTable::fromSymbol. Disabling command stats was measured NOT to be a
+// workaround, so both paths need cover.
+TEST_F(RedisClientImplTest, UnsolicitedReplyIsDroppedWithCommandStatsEnabled) {
   InSequence s;
 
   setup(std::make_shared<ConfigEnableCommandStats>());
@@ -600,7 +619,9 @@ TEST_F(RedisClientImplTest, UnsolicitedPushFrameWithCommandStatsEnabled) {
   }));
   upstream_read_filter_->onData(fake_data, false);
 
-  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  // The guard only logs, matching upstream: no stat moves.
+  EXPECT_EQ(Network::Connection::State::Open, upstream_connection_->state());
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
 
   EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
   EXPECT_CALL(*connect_or_op_timer_, disableTimer());
