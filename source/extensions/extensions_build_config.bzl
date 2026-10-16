@@ -81,6 +81,7 @@ EXTENSIONS = {
     "envoy.health_checkers.dynamic_modules":            "//source/extensions/health_checkers/dynamic_modules:config",
     "envoy.health_checkers.redis":                      "//source/extensions/health_checkers/redis:config",
     "envoy.health_checkers.thrift":                     "//source/extensions/health_checkers/thrift:config",
+    "envoy.health_checkers.udp":                        "//source/extensions/health_checkers/udp:health_checker_lib",
     "envoy.health_checkers.tcp":                        "//source/extensions/health_checkers/tcp:health_checker_lib",
     "envoy.health_checkers.http":                       "//source/extensions/health_checkers/http:health_checker_lib",
     "envoy.health_checkers.grpc":                       "//source/extensions/health_checkers/grpc:health_checker_lib",
@@ -101,6 +102,7 @@ EXTENSIONS = {
     "envoy.matching.matchers.cel_matcher":              "//source/extensions/matching/input_matchers/cel_matcher:config",
     "envoy.matching.matchers.dynamic_modules":           "//source/extensions/matching/input_matchers/dynamic_modules:config",
     "envoy.matching.matchers.metadata_matcher":         "//source/extensions/matching/input_matchers/metadata:config",
+    "envoy.matching.matchers.uri_template":             "//source/extensions/matching/input_matchers/uri_template:config",
 
     #
     # Network Matchers
@@ -455,6 +457,12 @@ EXTENSIONS = {
     "envoy.tls.cert_validator.spiffe":                  "//source/extensions/transport_sockets/tls/cert_validator/spiffe:config",
 
     #
+    # TLS handshakers
+    #
+
+    "envoy.tls.handshakers.dynamic_modules":             "//source/extensions/transport_sockets/tls/handshakers/dynamic_modules:config",
+
+    #
     # HTTP header formatters
     #
 
@@ -497,6 +505,13 @@ EXTENSIONS = {
     # AI filters
     #
     "envoy.http.ai_filters.request_info":               "//source/extensions/http/ai_filters/request_info:config",
+    "envoy.http.ai_filters.schema_validation":          "//source/extensions/http/ai_filters/schema_validation:config",
+    "envoy.http.ai_filters.transcoder":                 "//source/extensions/http/ai_filters/transcoder:config",
+
+    #
+    # AI Protocol Manager External Buffer
+    #
+    "envoy.ai_protocol_manager.external_buffer.in_memory": "//source/extensions/filters/http/ai_protocol_manager:external_buffer_impl_lib",
 
     #
     # Injected credentials
@@ -657,6 +672,12 @@ EXTENSIONS = {
     "envoy.router.cluster_specifier_plugin.dynamic_modules": "//source/extensions/router/cluster_specifiers/dynamic_modules:config",
     "envoy.router.cluster_specifier_plugin.lua":             "//source/extensions/router/cluster_specifiers/lua:config",
     "envoy.router.cluster_specifier_plugin.matcher":         "//source/extensions/router/cluster_specifiers/matcher:config",
+    "envoy.router.cluster_specifier_plugin.priority_group":  "//source/extensions/router/cluster_specifiers/priority_group:config",
+
+    #
+    # Route specifier
+    #
+    "envoy.router.route_specifiers.dynamic_modules":         "//source/extensions/router/route_specifiers/dynamic_modules:config",
 
     #
     # Extensions for generic proxy
