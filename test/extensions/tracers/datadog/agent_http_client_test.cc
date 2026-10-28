@@ -1,5 +1,7 @@
 #include <chrono>
 #include <optional>
+#include <string>
+#include <utility>
 
 #include "envoy/http/header_map.h"
 
@@ -60,6 +62,7 @@ protected:
   AgentHTTPClient client_;
   datadog::tracing::HTTPClient::URL url_;
   Http::AsyncClient::Callbacks* callbacks_;
+  testing::MockFunction<void(datadog::tracing::DictWriter&)> set_headers_;
   testing::MockFunction<void(int status, const datadog::tracing::DictReader& headers,
                              std::string body)>
       on_response_;
@@ -94,14 +97,16 @@ TEST_F(DatadogAgentHttpClientTest, PathFromURL) {
 TEST_F(DatadogAgentHttpClientTest, MissingThreadLocalCluster) {
   // If `getThreadLocalCluster()` returns null, then `post` cannot create a
   // request and so will immediately return successfully but increment the
-  // "reports skipped no cluster" counter.
+  // "reports skipped no cluster" counter. The request headers are not built.
 
   NiceMock<Upstream::MockClusterManager> cluster_manager;
   AgentHTTPClient client(cluster_manager, "fake_cluster", "test_host", stats_, time_);
 
+  EXPECT_CALL(set_headers_, Call(_)).Times(0);
   const auto ignore = [](auto&&...) {};
-  datadog::tracing::Expected<void> result = client.post(
-      url_, ignore, "", ignore, ignore, time_.monotonicTime() + std::chrono::seconds(1));
+  datadog::tracing::Expected<void> result =
+      client.post(url_, set_headers_.AsStdFunction(), "payload", ignore, ignore,
+                  time_.monotonicTime() + std::chrono::seconds(1));
   EXPECT_TRUE(result) << result.error();
   EXPECT_EQ(1, stats_.reports_skipped_no_cluster_.value());
   EXPECT_EQ(0, stats_.reports_failed_.value());
@@ -128,10 +133,9 @@ TEST_F(DatadogAgentHttpClientTest, PostAfterShutdown) {
       .Times(0);
   client_.shutdown();
 
-  testing::MockFunction<void(datadog::tracing::DictWriter&)> set_headers;
-  EXPECT_CALL(set_headers, Call(_)).Times(0);
+  EXPECT_CALL(set_headers_, Call(_)).Times(0);
   datadog::tracing::Expected<void> result =
-      client_.post(url_, set_headers.AsStdFunction(), "", on_response_.AsStdFunction(),
+      client_.post(url_, set_headers_.AsStdFunction(), "", on_response_.AsStdFunction(),
                    on_error_.AsStdFunction(), time_.monotonicTime() + std::chrono::seconds(1));
   EXPECT_TRUE(result) << result.error();
   EXPECT_EQ(0, stats_.reports_skipped_no_cluster_.value());
@@ -221,6 +225,54 @@ TEST_F(DatadogAgentHttpClientTest, RequestBody) {
   EXPECT_TRUE(result) << result.error();
   EXPECT_EQ(0, stats_.reports_skipped_no_cluster_.value());
   EXPECT_EQ(0, stats_.reports_failed_.value());
+}
+
+TEST_F(DatadogAgentHttpClientTest, EmptyRequestBody) {
+  EXPECT_CALL(cluster_manager_.instance_.thread_local_cluster_.async_client_, send_(_, _, _))
+      .WillOnce(
+          Invoke([this](Http::RequestMessagePtr& message, Http::AsyncClient::Callbacks&,
+                        const Http::AsyncClient::RequestOptions&) -> Http::AsyncClient::Request* {
+            EXPECT_EQ(0, message->body().length());
+            return &request_;
+          }));
+
+  // `~AgentHTTPClient()` will cancel the request since we don't finish it here.
+  EXPECT_CALL(request_, cancel());
+
+  const auto ignore = [](auto&&...) {};
+  datadog::tracing::Expected<void> result = client_.post(
+      url_, ignore, "", ignore, ignore, time_.monotonicTime() + std::chrono::seconds(1));
+  EXPECT_TRUE(result) << result.error();
+}
+
+TEST_F(DatadogAgentHttpClientTest, LargeRequestBodyIsNotCopied) {
+  // The request body takes over the memory of the `body` argument, even when it
+  // is larger than a buffer slice.
+  std::string body(64 * 1024, 'x');
+  body.back() = 'y';
+  const std::string expected_body = body;
+  const void* const body_data = body.data();
+
+  EXPECT_CALL(cluster_manager_.instance_.thread_local_cluster_.async_client_, send_(_, _, _))
+      .WillOnce(
+          Invoke([this, &expected_body, body_data](
+                     Http::RequestMessagePtr& message, Http::AsyncClient::Callbacks&,
+                     const Http::AsyncClient::RequestOptions&) -> Http::AsyncClient::Request* {
+            EXPECT_EQ(expected_body, message->body().toString());
+            const Buffer::RawSliceVector slices = message->body().getRawSlices();
+            EXPECT_EQ(1, slices.size());
+            EXPECT_EQ(body_data, slices.front().mem_);
+            return &request_;
+          }));
+
+  // `~AgentHTTPClient()` will cancel the request since we don't finish it here.
+  EXPECT_CALL(request_, cancel());
+
+  const auto ignore = [](auto&&...) {};
+  datadog::tracing::Expected<void> result =
+      client_.post(url_, ignore, std::move(body), ignore, ignore,
+                   time_.monotonicTime() + std::chrono::seconds(1));
+  EXPECT_TRUE(result) << result.error();
 }
 
 TEST_F(DatadogAgentHttpClientTest, OnResponse200) {
@@ -534,15 +586,18 @@ TEST_F(DatadogAgentHttpClientTest, SendFailReturnsError) {
 TEST_F(DatadogAgentHttpClientTest, SendCalculatedTimeoutIsZero) {
   // If the `deadline` argument to `AgentHTTPClient::post` is such that the
   // timeout calculated by `post` truncates to exactly zero milliseconds, then
-  // `post` will return an error and increment `stats_.reports_dropped_`.
+  // `post` will return an error and increment `stats_.reports_dropped_`,
+  // without building the request headers.
 
   NiceMock<Upstream::MockClusterManager> cluster_manager;
   AgentHTTPClient client(cluster_manager, "fake_cluster", "test_host", stats_, time_);
 
+  EXPECT_CALL(set_headers_, Call(_)).Times(0);
   const auto ignore = [](auto&&...) {};
   const auto deadline = time_.monotonicTime() + std::chrono::seconds(1);
   time_.setMonotonicTime(deadline);
-  datadog::tracing::Expected<void> result = client.post(url_, ignore, "", ignore, ignore, deadline);
+  datadog::tracing::Expected<void> result =
+      client.post(url_, set_headers_.AsStdFunction(), "", ignore, ignore, deadline);
   ASSERT_FALSE(result);
   EXPECT_EQ(datadog::tracing::Error::ENVOY_HTTP_CLIENT_FAILURE, result.error().code);
   EXPECT_EQ(1, stats_.reports_dropped_.value());
@@ -554,15 +609,17 @@ TEST_F(DatadogAgentHttpClientTest, SendCalculatedTimeoutIsNegative) {
   // If the `deadline` argument to `AgentHTTPClient::post` is such that the
   // timeout calculated by `post` truncates to a negative number of
   // milliseconds, then `post` will return an error and increment
-  // `stats_.reports_dropped_`.
+  // `stats_.reports_dropped_`, without building the request headers.
 
   NiceMock<Upstream::MockClusterManager> cluster_manager;
   AgentHTTPClient client(cluster_manager, "fake_cluster", "test_host", stats_, time_);
 
+  EXPECT_CALL(set_headers_, Call(_)).Times(0);
   const auto ignore = [](auto&&...) {};
   const auto deadline = time_.monotonicTime() + std::chrono::seconds(1);
   time_.setMonotonicTime(deadline + std::chrono::seconds(1));
-  datadog::tracing::Expected<void> result = client.post(url_, ignore, "", ignore, ignore, deadline);
+  datadog::tracing::Expected<void> result =
+      client.post(url_, set_headers_.AsStdFunction(), "payload", ignore, ignore, deadline);
   ASSERT_FALSE(result);
   EXPECT_EQ(datadog::tracing::Error::ENVOY_HTTP_CLIENT_FAILURE, result.error().code);
   EXPECT_EQ(1, stats_.reports_dropped_.value());
