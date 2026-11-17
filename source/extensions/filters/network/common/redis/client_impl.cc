@@ -2,8 +2,11 @@
 
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 
+#include "source/common/common/macros.h"
+#include "source/common/runtime/runtime_features.h"
 #include "source/extensions/filters/network/common/redis/aws_iam_authenticator_impl.h"
 
+#include "absl/strings/ascii.h"
 #include "client.h"
 
 namespace Envoy {
@@ -182,7 +185,7 @@ PoolRequest* ClientImpl::makeRequest(const RespValue& request, ClientCallbacks& 
     command = redis_command_stats_->getUnusedStatName();
   }
 
-  pending_requests_.emplace_back(*this, callbacks, command);
+  pending_requests_.emplace_back(*this, callbacks, command, replyCheckFor(request));
   encoder_->encode(request, encoder_buffer_);
 
   // If we have enabled queuing (to pause AUTH while credentials are being used), don't flush our
@@ -223,7 +226,7 @@ PoolRequest* ClientImpl::makeRequestImmediate(const RespValue& request,
     command = redis_command_stats_->getUnusedStatName();
   }
   Buffer::OwnedImpl immediate_buffer;
-  pending_requests_.emplace_back(*this, callbacks, command);
+  pending_requests_.emplace_back(*this, callbacks, command, replyCheckFor(request));
   encoder_->encode(request, immediate_buffer);
   connection_->write(immediate_buffer, false);
   // Flush buffer if we've queued up any requests while waiting for authentication credentials
@@ -246,14 +249,146 @@ void ClientImpl::onConnectOrOpTimeout() {
   connection_->close(Network::ConnectionCloseType::NoFlush);
 }
 
+// Only commands whose RESP2 reply type never varies with arguments or server state belong here.
+// Revisit when this pin decodes RESP3: HGETALL then replies with a map and SMEMBERS with a set.
+const ClientImpl::ExpectedReplyMap& ClientImpl::expectedReplies() {
+  CONSTRUCT_ON_FIRST_USE(ExpectedReplyMap, {{"append", ExpectedReply::Integer},
+                                            {"decr", ExpectedReply::Integer},
+                                            {"decrby", ExpectedReply::Integer},
+                                            {"del", ExpectedReply::Integer},
+                                            {"exists", ExpectedReply::Integer},
+                                            {"expire", ExpectedReply::Integer},
+                                            {"expireat", ExpectedReply::Integer},
+                                            {"hdel", ExpectedReply::Integer},
+                                            {"hexists", ExpectedReply::Integer},
+                                            {"hincrby", ExpectedReply::Integer},
+                                            {"hlen", ExpectedReply::Integer},
+                                            {"hset", ExpectedReply::Integer},
+                                            {"hsetnx", ExpectedReply::Integer},
+                                            {"incr", ExpectedReply::Integer},
+                                            {"incrby", ExpectedReply::Integer},
+                                            {"llen", ExpectedReply::Integer},
+                                            {"lpush", ExpectedReply::Integer},
+                                            {"persist", ExpectedReply::Integer},
+                                            {"pexpire", ExpectedReply::Integer},
+                                            {"pexpireat", ExpectedReply::Integer},
+                                            {"pttl", ExpectedReply::Integer},
+                                            {"publish", ExpectedReply::Integer},
+                                            {"rpush", ExpectedReply::Integer},
+                                            {"sadd", ExpectedReply::Integer},
+                                            {"scard", ExpectedReply::Integer},
+                                            {"setnx", ExpectedReply::Integer},
+                                            {"sismember", ExpectedReply::Integer},
+                                            {"spublish", ExpectedReply::Integer},
+                                            {"srem", ExpectedReply::Integer},
+                                            {"strlen", ExpectedReply::Integer},
+                                            {"touch", ExpectedReply::Integer},
+                                            {"ttl", ExpectedReply::Integer},
+                                            {"unlink", ExpectedReply::Integer},
+                                            {"zcard", ExpectedReply::Integer},
+                                            {"get", ExpectedReply::BulkStringOrNull},
+                                            {"getdel", ExpectedReply::BulkStringOrNull},
+                                            {"getset", ExpectedReply::BulkStringOrNull},
+                                            {"hget", ExpectedReply::BulkStringOrNull},
+                                            {"lindex", ExpectedReply::BulkStringOrNull},
+                                            {"hgetall", ExpectedReply::Array},
+                                            {"hkeys", ExpectedReply::Array},
+                                            {"hmget", ExpectedReply::Array},
+                                            {"hvals", ExpectedReply::Array},
+                                            {"lrange", ExpectedReply::Array},
+                                            {"mget", ExpectedReply::Array},
+                                            {"smembers", ExpectedReply::Array}});
+}
+
+ClientImpl::ReplyCheck ClientImpl::replyCheckFor(const RespValue& request) const {
+  // Inside MULTI the server answers every command with +QUEUED.
+  if (is_transaction_client_) {
+    return {};
+  }
+  const RespValue* command = nullptr;
+  if (request.type() == RespType::Array && !request.asArray().empty()) {
+    command = &request.asArray().front();
+  } else if (request.type() == RespType::CompositeArray) {
+    command = request.asCompositeArray().command();
+  }
+  if (command == nullptr ||
+      (command->type() != RespType::BulkString && command->type() != RespType::SimpleString)) {
+    return {};
+  }
+  const auto it = expectedReplies().find(absl::AsciiStrToLower(command->asString()));
+  if (it == expectedReplies().end()) {
+    return {};
+  }
+  return {it->second, it->first};
+}
+
+bool ClientImpl::replyMatches(ExpectedReply expected_reply, RespType reply_type) {
+  if (reply_type == RespType::Error) {
+    return true;
+  }
+  switch (expected_reply) {
+  case ExpectedReply::Unchecked:
+    return true;
+  case ExpectedReply::Integer:
+    return reply_type == RespType::Integer;
+  case ExpectedReply::BulkStringOrNull:
+    return reply_type == RespType::BulkString || reply_type == RespType::Null;
+  case ExpectedReply::Array:
+    return reply_type == RespType::Array;
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
+}
+
+absl::string_view ClientImpl::expectedReplyName(ExpectedReply expected_reply) {
+  switch (expected_reply) {
+  case ExpectedReply::Unchecked:
+    return "any";
+  case ExpectedReply::Integer:
+    return "integer";
+  case ExpectedReply::BulkStringOrNull:
+    return "bulk string or null";
+  case ExpectedReply::Array:
+    return "array";
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
+}
+
+absl::string_view ClientImpl::respTypeName(RespType type) {
+  switch (type) {
+  case RespType::Null:
+    return "null";
+  case RespType::SimpleString:
+    return "simple string";
+  case RespType::BulkString:
+    return "bulk string";
+  case RespType::Integer:
+    return "integer";
+  case RespType::Error:
+    return "error";
+  case RespType::Array:
+    return "array";
+  case RespType::CompositeArray:
+    return "composite array";
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
+}
+
 void ClientImpl::onData(Buffer::Instance& data) {
   TRY_NEEDS_AUDIT { decoder_->decode(data); }
-  END_TRY catch (ProtocolError&) {
-    putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
-    host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
-    host_->stats().rq_error_.inc();
-    connection_->close(Network::ConnectionCloseType::NoFlush);
+  END_TRY catch (ProtocolError&) { onProtocolError(); }
+}
+
+void ClientImpl::onProtocolError() {
+  // The decoder keeps parsing the buffer after a reply type mismatch closes the connection, so a
+  // later decoder error would count the same failure twice.
+  if (protocol_error_reported_) {
+    return;
   }
+  protocol_error_reported_ = true;
+  putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
+  host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
+  host_->stats().rq_error_.inc();
+  connection_->close(Network::ConnectionCloseType::NoFlush);
 }
 
 void ClientImpl::putOutlierEvent(Upstream::Outlier::Result result) {
@@ -317,6 +452,21 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
     return;
   }
   PendingRequest& request = pending_requests_.front();
+
+  // RESP has no request id, so one lost or surplus reply shifts every later reply onto another.
+  // A wrong reply type exposes the shift (envoyproxy/envoy#48205): fail the connection instead.
+  if (!replyMatches(request.reply_check_.expected_, value->type()) &&
+      Runtime::runtimeFeatureEnabled(
+          "envoy.reloadable_features.redis_close_on_reply_type_mismatch")) {
+    ENVOY_LOG_PERIODIC(warn, std::chrono::seconds(1),
+                       "redis: closing upstream connection to {}: {} expects reply type {}, got {}",
+                       host_->observabilityName(), request.reply_check_.command_,
+                       expectedReplyName(request.reply_check_.expected_),
+                       respTypeName(value->type()));
+    onProtocolError();
+    return;
+  }
+
   const bool canceled = request.canceled_;
 
   if (config_->enableCommandStats()) {
@@ -366,8 +516,8 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
 }
 
 ClientImpl::PendingRequest::PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks,
-                                           Stats::StatName command)
-    : parent_(parent), callbacks_(callbacks), command_{command},
+                                           Stats::StatName command, ReplyCheck reply_check)
+    : parent_(parent), callbacks_(callbacks), command_{command}, reply_check_(reply_check),
       aggregate_request_timer_(parent_.redis_command_stats_->createAggregateTimer(
           parent_.scope_, parent_.time_source_)) {
   if (parent_.config_->enableCommandStats()) {

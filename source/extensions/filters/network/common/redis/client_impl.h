@@ -18,6 +18,8 @@
 #include "source/extensions/filters/network/common/redis/client.h"
 #include "source/extensions/filters/network/common/redis/utility.h"
 
+#include "absl/container/flat_hash_map.h"
+
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
@@ -138,8 +140,18 @@ private:
     ClientImpl& parent_;
   };
 
+  // The RESP2 reply type a command always gets, apart from an error reply.
+  enum class ExpectedReply : uint8_t { Unchecked, Integer, BulkStringOrNull, Array };
+
+  struct ReplyCheck {
+    ExpectedReply expected_{ExpectedReply::Unchecked};
+    // Points into expectedReplies(), which is never modified after construction.
+    absl::string_view command_;
+  };
+
   struct PendingRequest : public PoolRequest {
-    PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks, Stats::StatName stat_name);
+    PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks, Stats::StatName stat_name,
+                   ReplyCheck reply_check);
     ~PendingRequest() override;
 
     // PoolRequest
@@ -148,13 +160,23 @@ private:
     ClientImpl& parent_;
     ClientCallbacks& callbacks_;
     Stats::StatName command_;
+    const ReplyCheck reply_check_;
     bool canceled_{};
     Stats::TimespanPtr aggregate_request_timer_;
     Stats::TimespanPtr command_request_timer_;
   };
 
+  using ExpectedReplyMap = absl::flat_hash_map<std::string, ExpectedReply>;
+
+  static const ExpectedReplyMap& expectedReplies();
+  static bool replyMatches(ExpectedReply expected_reply, RespType reply_type);
+  static absl::string_view expectedReplyName(ExpectedReply expected_reply);
+  static absl::string_view respTypeName(RespType type);
+  ReplyCheck replyCheckFor(const RespValue& request) const;
+
   void onConnectOrOpTimeout();
   void onData(Buffer::Instance& data);
+  void onProtocolError();
   void putOutlierEvent(Upstream::Outlier::Result result);
 
   // DecoderCallbacks
@@ -180,6 +202,7 @@ private:
   Stats::Scope& scope_;
   bool is_transaction_client_;
   bool queue_enabled_{false};
+  bool protocol_error_reported_{false};
   std::optional<envoy::extensions::filters::network::redis_proxy::v3::AwsIam> aws_iam_config_;
   std::optional<Common::Redis::AwsIamAuthenticator::AwsIamAuthenticatorSharedPtr>
       aws_iam_authenticator_;

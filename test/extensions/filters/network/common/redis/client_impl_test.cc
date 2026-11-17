@@ -13,6 +13,7 @@
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/upstream/host.h"
 #include "test/test_common/simulated_time_system.h"
+#include "test/test_common/test_runtime.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -80,8 +81,8 @@ public:
         Common::Redis::RedisCommandStats::createRedisCommandStats(stats_.symbolTable());
 
     client_ = ClientImpl::create(host_, dispatcher_, Common::Redis::EncoderPtr{encoder_}, *this,
-                                 config_, redis_command_stats_, *stats_.rootScope(), false, "pass",
-                                 std::nullopt, std::nullopt);
+                                 config_, redis_command_stats_, *stats_.rootScope(),
+                                 is_transaction_client_, "pass", std::nullopt, std::nullopt);
     EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_total_.value());
     EXPECT_EQ(1UL, host_->stats_.cx_total_.value());
     EXPECT_EQ(false, client_->active());
@@ -104,6 +105,83 @@ public:
     ClientImpl* client_impl = dynamic_cast<ClientImpl*>(client_.get());
     EXPECT_NE(client_impl, nullptr);
     client_impl->onRespValue(std::move(response1));
+  }
+
+  static Common::Redis::RespValue makeCommand(const std::vector<std::string>& args) {
+    std::vector<Common::Redis::RespValue> values(args.size());
+    for (size_t i = 0; i < args.size(); i++) {
+      values[i].type(Common::Redis::RespType::BulkString);
+      values[i].asString() = args[i];
+    }
+    Common::Redis::RespValue command;
+    command.type(Common::Redis::RespType::Array);
+    command.asArray().swap(values);
+    return command;
+  }
+
+  static Common::Redis::RespValuePtr makeReply(Common::Redis::RespType type) {
+    auto reply = std::make_unique<Common::Redis::RespValue>();
+    reply->type(type);
+    switch (type) {
+    case Common::Redis::RespType::Integer:
+      reply->asInteger() = 1;
+      break;
+    case Common::Redis::RespType::SimpleString:
+    case Common::Redis::RespType::BulkString:
+      reply->asString() = "value";
+      break;
+    case Common::Redis::RespType::Error:
+      reply->asString() = "ERR some error";
+      break;
+    default:
+      break;
+    }
+    return reply;
+  }
+
+  // Connects with one unchecked request in flight and answers it, leaving the client connected
+  // and idle.
+  void connectWithFirstRequest() {
+    Common::Redis::RespValue request;
+    MockClientCallbacks callbacks;
+    EXPECT_CALL(*encoder_, encode(Ref(request), _));
+    EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+    client_->makeRequest(request, callbacks);
+
+    onConnected();
+
+    Buffer::OwnedImpl fake_data;
+    EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+      Common::Redis::RespValuePtr reply = makeReply(Common::Redis::RespType::Null);
+      EXPECT_CALL(callbacks, onResponse_(Ref(reply)));
+      EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+      EXPECT_CALL(host_->outlier_detector_,
+                  putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+      callbacks_->onRespValue(std::move(reply));
+    }));
+    upstream_read_filter_->onData(fake_data, false);
+  }
+
+  // Sends `request`, answers it with a reply of `reply_type` as the only pending request, and
+  // expects the reply to reach the caller unchanged.
+  void expectReplyDelivered(const Common::Redis::RespValue& request,
+                            Common::Redis::RespType reply_type) {
+    MockClientCallbacks callbacks;
+    EXPECT_CALL(*encoder_, encode(Ref(request), _));
+    EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+    EXPECT_CALL(*connect_or_op_timer_, enableTimer(_, _));
+    client_->makeRequest(request, callbacks);
+
+    Buffer::OwnedImpl fake_data;
+    EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+      Common::Redis::RespValuePtr reply = makeReply(reply_type);
+      EXPECT_CALL(callbacks, onResponse_(Ref(reply)));
+      EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+      EXPECT_CALL(host_->outlier_detector_,
+                  putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+      callbacks_->onRespValue(std::move(reply));
+    }));
+    upstream_read_filter_->onData(fake_data, false);
   }
 
   void testInitializeReadPolicy(
@@ -145,6 +223,7 @@ public:
   Common::Redis::RedisCommandStatsSharedPtr redis_command_stats_;
   std::string auth_username_;
   std::string auth_password_;
+  bool is_transaction_client_{false};
 };
 
 TEST_F(RedisClientImplTest, BatchWithZeroBufferAndTimeout) {
@@ -835,6 +914,227 @@ TEST_F(RedisClientImplTest, ProtocolError) {
 
   EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
   EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
+}
+
+// An EXISTS answered by a bulk string means replies no longer line up with pending requests. The
+// client must close instead of delivering, and count the failure once.
+TEST_F(RedisClientImplTest, ReplyTypeMismatchClosesConnection) {
+  InSequence s;
+
+  setup();
+
+  Common::Redis::RespValue request1 = makeCommand({"EXISTS", "key1"});
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+
+  Common::Redis::RespValue request2 = makeCommand({"GET", "key2"});
+  MockClientCallbacks callbacks2;
+  EXPECT_CALL(*encoder_, encode(Ref(request2), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  client_->makeRequest(request2, callbacks2);
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(callbacks1, onFailure());
+    EXPECT_CALL(callbacks2, onFailure());
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::BulkString));
+
+    // The decoder keeps parsing the same buffer after the close: a well-formed frame finds nothing
+    // pending, and malformed bytes raise a decoder error for a connection that already failed.
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::BulkString));
+    throw Common::Redis::ProtocolError("invalid value type");
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
+}
+
+// The health checker closes the client from its response callback when it does not reuse
+// connections. A decoder error on the rest of that buffer must still be counted.
+TEST_F(RedisClientImplTest, ProtocolErrorAfterCallbackClosesClientIsCounted) {
+  InSequence s;
+
+  setup();
+
+  Common::Redis::RespValue request1 = makeCommand({"PING"});
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(callbacks1, onResponse_(_)).WillOnce(Invoke([&](Common::Redis::RespValuePtr&) {
+      client_->close();
+    }));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer()).Times(2);
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::SimpleString));
+
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    throw Common::Redis::ProtocolError("invalid value type");
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
+}
+
+// A canceled request still occupies its slot, so a reply of the wrong type for it exposes the same
+// shift. Covers the Array expectation too.
+TEST_F(RedisClientImplTest, CanceledRequestReplyTypeMismatchClosesConnection) {
+  InSequence s;
+
+  setup();
+
+  Common::Redis::RespValue request1 = makeCommand({"HGETALL", "key1"});
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  PoolRequest* handle1 = client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+  handle1->cancel();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(callbacks1, onFailure()).Times(0);
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::Integer));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_rq_cancelled_.value());
+}
+
+// MGET reaches the upstream as one fragmented "get" per key, built as a CompositeArray.
+TEST_F(RedisClientImplTest, FragmentedGetReplyTypeMismatchClosesConnection) {
+  InSequence s;
+
+  setup();
+
+  auto base_request =
+      std::make_shared<Common::Redis::RespValue>(makeCommand({"MGET", "key1", "key2"}));
+  Common::Redis::RespValue get_command;
+  get_command.type(Common::Redis::RespType::BulkString);
+  get_command.asString() = "get";
+  Common::Redis::RespValue request1(base_request, get_command, 1, 1);
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(callbacks1, onFailure());
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::Integer));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+}
+
+TEST_F(RedisClientImplTest, ExpectedReplyTypesAreDelivered) {
+  InSequence s;
+
+  setup();
+  connectWithFirstRequest();
+
+  expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::Integer);
+  expectReplyDelivered(makeCommand({"get", "key"}), Common::Redis::RespType::BulkString);
+  expectReplyDelivered(makeCommand({"GET", "key"}), Common::Redis::RespType::Null);
+  expectReplyDelivered(makeCommand({"HGETALL", "key"}), Common::Redis::RespType::Array);
+  // Any command may fail with an error reply.
+  expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::Error);
+  // Commands outside the table are not checked.
+  expectReplyDelivered(makeCommand({"EVAL", "return 1", "0"}), Common::Redis::RespType::Integer);
+  expectReplyDelivered(makeCommand({"SET", "key", "value"}), Common::Redis::RespType::Null);
+
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
+}
+
+// Inside MULTI the server answers every command with +QUEUED, so a transaction client cannot use
+// the per-command reply types.
+TEST_F(RedisClientImplTest, TransactionClientDoesNotCheckReplyTypes) {
+  InSequence s;
+
+  is_transaction_client_ = true;
+  setup();
+  connectWithFirstRequest();
+
+  expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::SimpleString);
+
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
+}
+
+// Operators can turn the check off without a new build if the table is ever wrong. The flag is
+// read when the reply arrives, so turning it off also covers requests already in flight.
+TEST_F(RedisClientImplTest, RuntimeGuardDisablesReplyTypeCheck) {
+  TestScopedRuntime scoped_runtime;
+  InSequence s;
+
+  setup();
+  connectWithFirstRequest();
+
+  Common::Redis::RespValue request = makeCommand({"EXISTS", "key"});
+  MockClientCallbacks callbacks;
+  EXPECT_CALL(*encoder_, encode(Ref(request), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  EXPECT_CALL(*connect_or_op_timer_, enableTimer(_, _));
+  client_->makeRequest(request, callbacks);
+
+  scoped_runtime.mergeValues(
+      {{"envoy.reloadable_features.redis_close_on_reply_type_mismatch", "false"}});
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    Common::Redis::RespValuePtr reply = makeReply(Common::Redis::RespType::BulkString);
+    EXPECT_CALL(callbacks, onResponse_(Ref(reply)));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(std::move(reply));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
 }
 
 TEST_F(RedisClientImplTest, ConnectFail) {
