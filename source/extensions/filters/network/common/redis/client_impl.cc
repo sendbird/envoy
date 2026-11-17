@@ -249,54 +249,53 @@ void ClientImpl::onConnectOrOpTimeout() {
 }
 
 // Only commands whose RESP2 reply type never varies with arguments or server state belong here.
-const absl::flat_hash_map<std::string, ClientImpl::ExpectedReply>& ClientImpl::expectedReplies() {
-  CONSTRUCT_ON_FIRST_USE(absl::flat_hash_map<std::string, ExpectedReply>,
-                         {{"append", ExpectedReply::Integer},
-                          {"decr", ExpectedReply::Integer},
-                          {"decrby", ExpectedReply::Integer},
-                          {"del", ExpectedReply::Integer},
-                          {"exists", ExpectedReply::Integer},
-                          {"expire", ExpectedReply::Integer},
-                          {"expireat", ExpectedReply::Integer},
-                          {"hdel", ExpectedReply::Integer},
-                          {"hexists", ExpectedReply::Integer},
-                          {"hincrby", ExpectedReply::Integer},
-                          {"hlen", ExpectedReply::Integer},
-                          {"hset", ExpectedReply::Integer},
-                          {"hsetnx", ExpectedReply::Integer},
-                          {"incr", ExpectedReply::Integer},
-                          {"incrby", ExpectedReply::Integer},
-                          {"llen", ExpectedReply::Integer},
-                          {"lpush", ExpectedReply::Integer},
-                          {"persist", ExpectedReply::Integer},
-                          {"pexpire", ExpectedReply::Integer},
-                          {"pexpireat", ExpectedReply::Integer},
-                          {"pttl", ExpectedReply::Integer},
-                          {"publish", ExpectedReply::Integer},
-                          {"rpush", ExpectedReply::Integer},
-                          {"sadd", ExpectedReply::Integer},
-                          {"scard", ExpectedReply::Integer},
-                          {"setnx", ExpectedReply::Integer},
-                          {"sismember", ExpectedReply::Integer},
-                          {"spublish", ExpectedReply::Integer},
-                          {"srem", ExpectedReply::Integer},
-                          {"strlen", ExpectedReply::Integer},
-                          {"touch", ExpectedReply::Integer},
-                          {"ttl", ExpectedReply::Integer},
-                          {"unlink", ExpectedReply::Integer},
-                          {"zcard", ExpectedReply::Integer},
-                          {"get", ExpectedReply::BulkStringOrNull},
-                          {"getdel", ExpectedReply::BulkStringOrNull},
-                          {"getset", ExpectedReply::BulkStringOrNull},
-                          {"hget", ExpectedReply::BulkStringOrNull},
-                          {"lindex", ExpectedReply::BulkStringOrNull},
-                          {"hgetall", ExpectedReply::Array},
-                          {"hkeys", ExpectedReply::Array},
-                          {"hmget", ExpectedReply::Array},
-                          {"hvals", ExpectedReply::Array},
-                          {"lrange", ExpectedReply::Array},
-                          {"mget", ExpectedReply::Array},
-                          {"smembers", ExpectedReply::Array}});
+const ClientImpl::ExpectedReplyMap& ClientImpl::expectedReplies() {
+  CONSTRUCT_ON_FIRST_USE(ExpectedReplyMap, {{"append", ExpectedReply::Integer},
+                                            {"decr", ExpectedReply::Integer},
+                                            {"decrby", ExpectedReply::Integer},
+                                            {"del", ExpectedReply::Integer},
+                                            {"exists", ExpectedReply::Integer},
+                                            {"expire", ExpectedReply::Integer},
+                                            {"expireat", ExpectedReply::Integer},
+                                            {"hdel", ExpectedReply::Integer},
+                                            {"hexists", ExpectedReply::Integer},
+                                            {"hincrby", ExpectedReply::Integer},
+                                            {"hlen", ExpectedReply::Integer},
+                                            {"hset", ExpectedReply::Integer},
+                                            {"hsetnx", ExpectedReply::Integer},
+                                            {"incr", ExpectedReply::Integer},
+                                            {"incrby", ExpectedReply::Integer},
+                                            {"llen", ExpectedReply::Integer},
+                                            {"lpush", ExpectedReply::Integer},
+                                            {"persist", ExpectedReply::Integer},
+                                            {"pexpire", ExpectedReply::Integer},
+                                            {"pexpireat", ExpectedReply::Integer},
+                                            {"pttl", ExpectedReply::Integer},
+                                            {"publish", ExpectedReply::Integer},
+                                            {"rpush", ExpectedReply::Integer},
+                                            {"sadd", ExpectedReply::Integer},
+                                            {"scard", ExpectedReply::Integer},
+                                            {"setnx", ExpectedReply::Integer},
+                                            {"sismember", ExpectedReply::Integer},
+                                            {"spublish", ExpectedReply::Integer},
+                                            {"srem", ExpectedReply::Integer},
+                                            {"strlen", ExpectedReply::Integer},
+                                            {"touch", ExpectedReply::Integer},
+                                            {"ttl", ExpectedReply::Integer},
+                                            {"unlink", ExpectedReply::Integer},
+                                            {"zcard", ExpectedReply::Integer},
+                                            {"get", ExpectedReply::BulkStringOrNull},
+                                            {"getdel", ExpectedReply::BulkStringOrNull},
+                                            {"getset", ExpectedReply::BulkStringOrNull},
+                                            {"hget", ExpectedReply::BulkStringOrNull},
+                                            {"lindex", ExpectedReply::BulkStringOrNull},
+                                            {"hgetall", ExpectedReply::Array},
+                                            {"hkeys", ExpectedReply::Array},
+                                            {"hmget", ExpectedReply::Array},
+                                            {"hvals", ExpectedReply::Array},
+                                            {"lrange", ExpectedReply::Array},
+                                            {"mget", ExpectedReply::Array},
+                                            {"smembers", ExpectedReply::Array}});
 }
 
 ClientImpl::ExpectedReply ClientImpl::expectedReplyFor(const RespValue& request) const {
@@ -337,12 +336,19 @@ bool ClientImpl::replyMatches(ExpectedReply expected_reply, RespType reply_type)
 
 void ClientImpl::onData(Buffer::Instance& data) {
   TRY_NEEDS_AUDIT { decoder_->decode(data); }
-  END_TRY catch (ProtocolError&) {
-    putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
-    host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
-    host_->stats().rq_error_.inc();
-    connection_->close(Network::ConnectionCloseType::NoFlush);
+  END_TRY catch (ProtocolError&) { onProtocolError(); }
+}
+
+void ClientImpl::onProtocolError() {
+  // A reply type mismatch closes the connection while the decoder keeps parsing the same buffer,
+  // and a later decoder error must not count the same connection failure again.
+  if (connection_->state() != Network::Connection::State::Open) {
+    return;
   }
+  putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
+  host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
+  host_->stats().rq_error_.inc();
+  connection_->close(Network::ConnectionCloseType::NoFlush);
 }
 
 void ClientImpl::putOutlierEvent(Upstream::Outlier::Result result) {
@@ -407,18 +413,14 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
   }
   PendingRequest& request = pending_requests_.front();
 
-  // RESP replies carry no request id, so one lost or surplus reply shifts every later reply onto
-  // the wrong request (envoyproxy/envoy#48205). A wrong reply type exposes the shift; fail, not
-  // deliver.
+  // RESP has no request id, so one lost or surplus reply shifts every later reply onto another.
+  // A wrong reply type exposes the shift (envoyproxy/envoy#48205): fail the connection instead.
   if (!replyMatches(request.expected_reply_, value->type())) {
     ENVOY_LOG_EVERY_POW_2(warn,
                           "redis: closing upstream connection to {}: reply type does not match "
                           "the pending request",
                           host_->observabilityName());
-    putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
-    host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
-    host_->stats().rq_error_.inc();
-    connection_->close(Network::ConnectionCloseType::NoFlush);
+    onProtocolError();
     return;
   }
 

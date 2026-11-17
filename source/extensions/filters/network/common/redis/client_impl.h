@@ -160,12 +160,15 @@ private:
     Stats::TimespanPtr command_request_timer_;
   };
 
-  static const absl::flat_hash_map<std::string, ExpectedReply>& expectedReplies();
+  using ExpectedReplyMap = absl::flat_hash_map<std::string, ExpectedReply>;
+
+  static const ExpectedReplyMap& expectedReplies();
   static bool replyMatches(ExpectedReply expected_reply, RespType reply_type);
   ExpectedReply expectedReplyFor(const RespValue& request) const;
 
   void onConnectOrOpTimeout();
   void onData(Buffer::Instance& data);
+  void onProtocolError();
   void putOutlierEvent(Upstream::Outlier::Result result);
 
   // DecoderCallbacks

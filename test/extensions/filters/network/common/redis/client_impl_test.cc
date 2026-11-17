@@ -915,9 +915,8 @@ TEST_F(RedisClientImplTest, ProtocolError) {
   EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
 }
 
-// RESP replies carry no request id, so a surplus or lost upstream reply shifts every later reply
-// onto the wrong caller. An EXISTS answered by a bulk string is that shift made visible: the client
-// must close the connection instead of delivering the reply.
+// An EXISTS answered by a bulk string means replies no longer line up with pending requests. The
+// client must close instead of delivering, and count the failure once.
 TEST_F(RedisClientImplTest, ReplyTypeMismatchClosesConnection) {
   InSequence s;
 
@@ -947,13 +946,46 @@ TEST_F(RedisClientImplTest, ReplyTypeMismatchClosesConnection) {
     EXPECT_CALL(*connect_or_op_timer_, disableTimer());
     callbacks_->onRespValue(makeReply(Common::Redis::RespType::BulkString));
 
-    // The next frame in the same buffer arrives after the close, with nothing pending.
+    // The decoder keeps parsing the same buffer after the close: a well-formed frame finds nothing
+    // pending, and malformed bytes raise a decoder error for a connection that already failed.
     callbacks_->onRespValue(makeReply(Common::Redis::RespType::BulkString));
+    throw Common::Redis::ProtocolError("invalid value type");
   }));
   upstream_read_filter_->onData(fake_data, false);
 
   EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
   EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
+}
+
+// A canceled request still occupies its slot, so a reply of the wrong type for it exposes the same
+// shift. Covers the Array expectation too.
+TEST_F(RedisClientImplTest, CanceledRequestReplyTypeMismatchClosesConnection) {
+  InSequence s;
+
+  setup();
+
+  Common::Redis::RespValue request1 = makeCommand({"HGETALL", "key1"});
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  PoolRequest* handle1 = client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+  handle1->cancel();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(callbacks1, onFailure()).Times(0);
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::Integer));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_rq_cancelled_.value());
 }
 
 // MGET reaches the upstream as one fragmented "get" per key, built as a CompositeArray.
