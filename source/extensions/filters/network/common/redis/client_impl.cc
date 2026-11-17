@@ -3,6 +3,7 @@
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 
 #include "source/common/common/macros.h"
+#include "source/common/runtime/runtime_features.h"
 #include "source/extensions/filters/network/common/redis/aws_iam_authenticator_impl.h"
 
 #include "absl/strings/ascii.h"
@@ -249,6 +250,7 @@ void ClientImpl::onConnectOrOpTimeout() {
 }
 
 // Only commands whose RESP2 reply type never varies with arguments or server state belong here.
+// Revisit when this pin decodes RESP3: HGETALL then replies with a map and SMEMBERS with a set.
 const ClientImpl::ExpectedReplyMap& ClientImpl::expectedReplies() {
   CONSTRUCT_ON_FIRST_USE(ExpectedReplyMap, {{"append", ExpectedReply::Integer},
                                             {"decr", ExpectedReply::Integer},
@@ -299,8 +301,10 @@ const ClientImpl::ExpectedReplyMap& ClientImpl::expectedReplies() {
 }
 
 ClientImpl::ExpectedReply ClientImpl::expectedReplyFor(const RespValue& request) const {
-  // Inside MULTI the server answers every command with +QUEUED.
-  if (is_transaction_client_) {
+  // Inside MULTI the server answers every command with +QUEUED. The runtime guard is a kill switch.
+  if (is_transaction_client_ ||
+      !Runtime::runtimeFeatureEnabled(
+          "envoy.reloadable_features.redis_close_on_reply_type_mismatch")) {
     return ExpectedReply::Unchecked;
   }
   const RespValue* command = nullptr;
@@ -330,6 +334,40 @@ bool ClientImpl::replyMatches(ExpectedReply expected_reply, RespType reply_type)
     return reply_type == RespType::BulkString || reply_type == RespType::Null;
   case ExpectedReply::Array:
     return reply_type == RespType::Array;
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
+}
+
+absl::string_view ClientImpl::expectedReplyName(ExpectedReply expected_reply) {
+  switch (expected_reply) {
+  case ExpectedReply::Unchecked:
+    return "any";
+  case ExpectedReply::Integer:
+    return "integer";
+  case ExpectedReply::BulkStringOrNull:
+    return "bulk string or null";
+  case ExpectedReply::Array:
+    return "array";
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
+}
+
+absl::string_view ClientImpl::respTypeName(RespType type) {
+  switch (type) {
+  case RespType::Null:
+    return "null";
+  case RespType::SimpleString:
+    return "simple string";
+  case RespType::BulkString:
+    return "bulk string";
+  case RespType::Integer:
+    return "integer";
+  case RespType::Error:
+    return "error";
+  case RespType::Array:
+    return "array";
+  case RespType::CompositeArray:
+    return "composite array";
   }
   PANIC_DUE_TO_CORRUPT_ENUM;
 }
@@ -401,9 +439,9 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
   // A wrong reply type exposes the shift (envoyproxy/envoy#48205): fail the connection instead.
   if (!replyMatches(request.expected_reply_, value->type())) {
     ENVOY_LOG_EVERY_POW_2(warn,
-                          "redis: closing upstream connection to {}: reply type does not match "
-                          "the pending request",
-                          host_->observabilityName());
+                          "redis: closing upstream connection to {}: expected a {} reply, got {}",
+                          host_->observabilityName(), expectedReplyName(request.expected_reply_),
+                          respTypeName(value->type()));
     onProtocolError();
     return;
   }

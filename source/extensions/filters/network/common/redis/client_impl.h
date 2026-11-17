@@ -164,6 +164,8 @@ private:
 
   static const ExpectedReplyMap& expectedReplies();
   static bool replyMatches(ExpectedReply expected_reply, RespType reply_type);
+  static absl::string_view expectedReplyName(ExpectedReply expected_reply);
+  static absl::string_view respTypeName(RespType type);
   ExpectedReply expectedReplyFor(const RespValue& request) const;
 
   void onConnectOrOpTimeout();

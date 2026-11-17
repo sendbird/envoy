@@ -92,6 +92,7 @@ envoy_cc_library(
         "//source/common/common:macros",
         "//source/common/network:filter_lib",
         "//source/common/protobuf:utility_lib",
+        "//source/common/runtime:runtime_features_lib",
         "//source/common/upstream:load_balancer_context_base_lib",
         "//source/common/upstream:upstream_lib",
         "@abseil-cpp//absl/container:flat_hash_map",
