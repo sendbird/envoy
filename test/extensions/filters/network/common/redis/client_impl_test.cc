@@ -836,6 +836,43 @@ TEST_F(RedisClientImplTest, ReplyTypeMismatchClosesConnection) {
   EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
 }
 
+// The health checker closes the client from its response callback when it does not reuse
+// connections. A decoder error on the rest of that buffer must still be counted.
+TEST_F(RedisClientImplTest, ProtocolErrorAfterCallbackClosesClientIsCounted) {
+  InSequence s;
+
+  setup();
+
+  Common::Redis::RespValue request1 = makeCommand({"PING"});
+  MockClientCallbacks callbacks1;
+  EXPECT_CALL(*encoder_, encode(Ref(request1), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  client_->makeRequest(request1, callbacks1);
+
+  onConnected();
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    EXPECT_CALL(callbacks1, onResponse_(_)).WillOnce(Invoke([&](Common::Redis::RespValuePtr&) {
+      client_->close();
+    }));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer()).Times(2);
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(makeReply(Common::Redis::RespType::SimpleString));
+
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestFailed, _));
+    EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+    throw Common::Redis::ProtocolError("invalid value type");
+  }));
+  upstream_read_filter_->onData(fake_data, false);
+
+  EXPECT_EQ(1UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+  EXPECT_EQ(1UL, host_->stats_.rq_error_.value());
+}
+
 // A canceled request still occupies its slot, so a reply of the wrong type for it exposes the same
 // shift. Covers the Array expectation too.
 TEST_F(RedisClientImplTest, CanceledRequestReplyTypeMismatchClosesConnection) {
