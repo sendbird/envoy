@@ -18,6 +18,8 @@
 #include "source/extensions/filters/network/common/redis/client.h"
 #include "source/extensions/filters/network/common/redis/utility.h"
 
+#include "absl/container/flat_hash_map.h"
+
 namespace Envoy {
 namespace Extensions {
 namespace NetworkFilters {
@@ -138,8 +140,12 @@ private:
     ClientImpl& parent_;
   };
 
+  // The RESP2 reply type a command always gets, apart from an error reply.
+  enum class ExpectedReply : uint8_t { Unchecked, Integer, BulkStringOrNull, Array };
+
   struct PendingRequest : public PoolRequest {
-    PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks, Stats::StatName stat_name);
+    PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks, Stats::StatName stat_name,
+                   ExpectedReply expected_reply);
     ~PendingRequest() override;
 
     // PoolRequest
@@ -148,10 +154,15 @@ private:
     ClientImpl& parent_;
     ClientCallbacks& callbacks_;
     Stats::StatName command_;
+    const ExpectedReply expected_reply_;
     bool canceled_{};
     Stats::TimespanPtr aggregate_request_timer_;
     Stats::TimespanPtr command_request_timer_;
   };
+
+  static const absl::flat_hash_map<std::string, ExpectedReply>& expectedReplies();
+  static bool replyMatches(ExpectedReply expected_reply, RespType reply_type);
+  ExpectedReply expectedReplyFor(const RespValue& request) const;
 
   void onConnectOrOpTimeout();
   void onData(Buffer::Instance& data);
