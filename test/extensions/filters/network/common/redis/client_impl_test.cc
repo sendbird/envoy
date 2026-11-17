@@ -13,6 +13,7 @@
 #include "test/mocks/network/mocks.h"
 #include "test/mocks/upstream/host.h"
 #include "test/test_common/simulated_time_system.h"
+#include "test/test_common/test_runtime.h"
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -1091,6 +1092,25 @@ TEST_F(RedisClientImplTest, TransactionClientDoesNotCheckReplyTypes) {
   connectWithFirstRequest();
 
   expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::SimpleString);
+
+  EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
+
+  EXPECT_CALL(*upstream_connection_, close(Network::ConnectionCloseType::NoFlush));
+  EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+  client_->close();
+}
+
+// Operators can turn the check off without a new build if the table is ever wrong.
+TEST_F(RedisClientImplTest, RuntimeGuardDisablesReplyTypeCheck) {
+  TestScopedRuntime scoped_runtime;
+  scoped_runtime.mergeValues(
+      {{"envoy.reloadable_features.redis_close_on_reply_type_mismatch", "false"}});
+  InSequence s;
+
+  setup();
+  connectWithFirstRequest();
+
+  expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::BulkString);
 
   EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
 
