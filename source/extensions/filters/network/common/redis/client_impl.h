@@ -143,9 +143,15 @@ private:
   // The RESP2 reply type a command always gets, apart from an error reply.
   enum class ExpectedReply : uint8_t { Unchecked, Integer, BulkStringOrNull, Array };
 
+  struct ReplyCheck {
+    ExpectedReply expected_{ExpectedReply::Unchecked};
+    // Points into expectedReplies(), which is never modified after construction.
+    absl::string_view command_;
+  };
+
   struct PendingRequest : public PoolRequest {
     PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks, Stats::StatName stat_name,
-                   ExpectedReply expected_reply);
+                   ReplyCheck reply_check);
     ~PendingRequest() override;
 
     // PoolRequest
@@ -154,7 +160,7 @@ private:
     ClientImpl& parent_;
     ClientCallbacks& callbacks_;
     Stats::StatName command_;
-    const ExpectedReply expected_reply_;
+    const ReplyCheck reply_check_;
     bool canceled_{};
     Stats::TimespanPtr aggregate_request_timer_;
     Stats::TimespanPtr command_request_timer_;
@@ -166,7 +172,7 @@ private:
   static bool replyMatches(ExpectedReply expected_reply, RespType reply_type);
   static absl::string_view expectedReplyName(ExpectedReply expected_reply);
   static absl::string_view respTypeName(RespType type);
-  ExpectedReply expectedReplyFor(const RespValue& request) const;
+  ReplyCheck replyCheckFor(const RespValue& request) const;
 
   void onConnectOrOpTimeout();
   void onData(Buffer::Instance& data);
