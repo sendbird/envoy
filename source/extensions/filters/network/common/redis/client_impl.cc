@@ -185,7 +185,7 @@ PoolRequest* ClientImpl::makeRequest(const RespValue& request, ClientCallbacks& 
     command = redis_command_stats_->getUnusedStatName();
   }
 
-  pending_requests_.emplace_back(*this, callbacks, command, expectedReplyFor(request));
+  pending_requests_.emplace_back(*this, callbacks, command, replyCheckFor(request));
   encoder_->encode(request, encoder_buffer_);
 
   // If we have enabled queuing (to pause AUTH while credentials are being used), don't flush our
@@ -226,7 +226,7 @@ PoolRequest* ClientImpl::makeRequestImmediate(const RespValue& request,
     command = redis_command_stats_->getUnusedStatName();
   }
   Buffer::OwnedImpl immediate_buffer;
-  pending_requests_.emplace_back(*this, callbacks, command, expectedReplyFor(request));
+  pending_requests_.emplace_back(*this, callbacks, command, replyCheckFor(request));
   encoder_->encode(request, immediate_buffer);
   connection_->write(immediate_buffer, false);
   // Flush buffer if we've queued up any requests while waiting for authentication credentials
@@ -300,12 +300,10 @@ const ClientImpl::ExpectedReplyMap& ClientImpl::expectedReplies() {
                                             {"smembers", ExpectedReply::Array}});
 }
 
-ClientImpl::ExpectedReply ClientImpl::expectedReplyFor(const RespValue& request) const {
-  // Inside MULTI the server answers every command with +QUEUED. The runtime guard is a kill switch.
-  if (is_transaction_client_ ||
-      !Runtime::runtimeFeatureEnabled(
-          "envoy.reloadable_features.redis_close_on_reply_type_mismatch")) {
-    return ExpectedReply::Unchecked;
+ClientImpl::ReplyCheck ClientImpl::replyCheckFor(const RespValue& request) const {
+  // Inside MULTI the server answers every command with +QUEUED.
+  if (is_transaction_client_) {
+    return {};
   }
   const RespValue* command = nullptr;
   if (request.type() == RespType::Array && !request.asArray().empty()) {
@@ -315,10 +313,13 @@ ClientImpl::ExpectedReply ClientImpl::expectedReplyFor(const RespValue& request)
   }
   if (command == nullptr ||
       (command->type() != RespType::BulkString && command->type() != RespType::SimpleString)) {
-    return ExpectedReply::Unchecked;
+    return {};
   }
   const auto it = expectedReplies().find(absl::AsciiStrToLower(command->asString()));
-  return it == expectedReplies().end() ? ExpectedReply::Unchecked : it->second;
+  if (it == expectedReplies().end()) {
+    return {};
+  }
+  return {it->second, it->first};
 }
 
 bool ClientImpl::replyMatches(ExpectedReply expected_reply, RespType reply_type) {
@@ -454,11 +455,14 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
 
   // RESP has no request id, so one lost or surplus reply shifts every later reply onto another.
   // A wrong reply type exposes the shift (envoyproxy/envoy#48205): fail the connection instead.
-  if (!replyMatches(request.expected_reply_, value->type())) {
-    ENVOY_LOG_EVERY_POW_2(warn,
-                          "redis: closing upstream connection to {}: expected a {} reply, got {}",
-                          host_->observabilityName(), expectedReplyName(request.expected_reply_),
-                          respTypeName(value->type()));
+  if (!replyMatches(request.reply_check_.expected_, value->type()) &&
+      Runtime::runtimeFeatureEnabled(
+          "envoy.reloadable_features.redis_close_on_reply_type_mismatch")) {
+    ENVOY_LOG_PERIODIC(warn, std::chrono::seconds(1),
+                       "redis: closing upstream connection to {}: {} expects a {} reply, got {}",
+                       host_->observabilityName(), request.reply_check_.command_,
+                       expectedReplyName(request.reply_check_.expected_),
+                       respTypeName(value->type()));
     onProtocolError();
     return;
   }
@@ -512,8 +516,8 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
 }
 
 ClientImpl::PendingRequest::PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks,
-                                           Stats::StatName command, ExpectedReply expected_reply)
-    : parent_(parent), callbacks_(callbacks), command_{command}, expected_reply_(expected_reply),
+                                           Stats::StatName command, ReplyCheck reply_check)
+    : parent_(parent), callbacks_(callbacks), command_{command}, reply_check_(reply_check),
       aggregate_request_timer_(parent_.redis_command_stats_->createAggregateTimer(
           parent_.scope_, parent_.time_source_)) {
   if (parent_.config_->enableCommandStats()) {
