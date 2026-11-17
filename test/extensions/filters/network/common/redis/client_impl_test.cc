@@ -1100,17 +1100,35 @@ TEST_F(RedisClientImplTest, TransactionClientDoesNotCheckReplyTypes) {
   client_->close();
 }
 
-// Operators can turn the check off without a new build if the table is ever wrong.
+// Operators can turn the check off without a new build if the table is ever wrong. The flag is
+// read when the reply arrives, so turning it off also covers requests already in flight.
 TEST_F(RedisClientImplTest, RuntimeGuardDisablesReplyTypeCheck) {
   TestScopedRuntime scoped_runtime;
-  scoped_runtime.mergeValues(
-      {{"envoy.reloadable_features.redis_close_on_reply_type_mismatch", "false"}});
   InSequence s;
 
   setup();
   connectWithFirstRequest();
 
-  expectReplyDelivered(makeCommand({"EXISTS", "key"}), Common::Redis::RespType::BulkString);
+  Common::Redis::RespValue request = makeCommand({"EXISTS", "key"});
+  MockClientCallbacks callbacks;
+  EXPECT_CALL(*encoder_, encode(Ref(request), _));
+  EXPECT_CALL(*flush_timer_, enabled()).WillOnce(Return(false));
+  EXPECT_CALL(*connect_or_op_timer_, enableTimer(_, _));
+  client_->makeRequest(request, callbacks);
+
+  scoped_runtime.mergeValues(
+      {{"envoy.reloadable_features.redis_close_on_reply_type_mismatch", "false"}});
+
+  Buffer::OwnedImpl fake_data;
+  EXPECT_CALL(*decoder_, decode(Ref(fake_data))).WillOnce(Invoke([&](Buffer::Instance&) -> void {
+    Common::Redis::RespValuePtr reply = makeReply(Common::Redis::RespType::BulkString);
+    EXPECT_CALL(callbacks, onResponse_(Ref(reply)));
+    EXPECT_CALL(*connect_or_op_timer_, disableTimer());
+    EXPECT_CALL(host_->outlier_detector_,
+                putResult(Upstream::Outlier::Result::ExtOriginRequestSuccess, _));
+    callbacks_->onRespValue(std::move(reply));
+  }));
+  upstream_read_filter_->onData(fake_data, false);
 
   EXPECT_EQ(0UL, host_->cluster_.traffic_stats_->upstream_cx_protocol_error_.value());
 
