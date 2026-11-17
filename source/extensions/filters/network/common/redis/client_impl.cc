@@ -340,11 +340,12 @@ void ClientImpl::onData(Buffer::Instance& data) {
 }
 
 void ClientImpl::onProtocolError() {
-  // A reply type mismatch closes the connection while the decoder keeps parsing the same buffer,
-  // and a later decoder error must not count the same connection failure again.
-  if (connection_->state() != Network::Connection::State::Open) {
+  // The decoder keeps parsing the buffer after a reply type mismatch closes the connection, so a
+  // later decoder error would count the same failure twice.
+  if (protocol_error_reported_) {
     return;
   }
+  protocol_error_reported_ = true;
   putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
   host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
   host_->stats().rq_error_.inc();
