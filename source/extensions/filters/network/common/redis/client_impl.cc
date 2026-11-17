@@ -2,8 +2,10 @@
 
 #include "envoy/extensions/filters/network/redis_proxy/v3/redis_proxy.pb.h"
 
+#include "source/common/common/macros.h"
 #include "source/extensions/filters/network/common/redis/aws_iam_authenticator_impl.h"
 
+#include "absl/strings/ascii.h"
 #include "client.h"
 
 namespace Envoy {
@@ -182,7 +184,7 @@ PoolRequest* ClientImpl::makeRequest(const RespValue& request, ClientCallbacks& 
     command = redis_command_stats_->getUnusedStatName();
   }
 
-  pending_requests_.emplace_back(*this, callbacks, command);
+  pending_requests_.emplace_back(*this, callbacks, command, expectedReplyFor(request));
   encoder_->encode(request, encoder_buffer_);
 
   // If we have enabled queuing (to pause AUTH while credentials are being used), don't flush our
@@ -223,7 +225,7 @@ PoolRequest* ClientImpl::makeRequestImmediate(const RespValue& request,
     command = redis_command_stats_->getUnusedStatName();
   }
   Buffer::OwnedImpl immediate_buffer;
-  pending_requests_.emplace_back(*this, callbacks, command);
+  pending_requests_.emplace_back(*this, callbacks, command, expectedReplyFor(request));
   encoder_->encode(request, immediate_buffer);
   connection_->write(immediate_buffer, false);
   // Flush buffer if we've queued up any requests while waiting for authentication credentials
@@ -244,6 +246,93 @@ void ClientImpl::onConnectOrOpTimeout() {
   }
 
   connection_->close(Network::ConnectionCloseType::NoFlush);
+}
+
+// Only commands whose RESP2 reply type never varies with arguments or server state belong here.
+const absl::flat_hash_map<std::string, ClientImpl::ExpectedReply>& ClientImpl::expectedReplies() {
+  CONSTRUCT_ON_FIRST_USE(absl::flat_hash_map<std::string, ExpectedReply>,
+                         {{"append", ExpectedReply::Integer},
+                          {"decr", ExpectedReply::Integer},
+                          {"decrby", ExpectedReply::Integer},
+                          {"del", ExpectedReply::Integer},
+                          {"exists", ExpectedReply::Integer},
+                          {"expire", ExpectedReply::Integer},
+                          {"expireat", ExpectedReply::Integer},
+                          {"hdel", ExpectedReply::Integer},
+                          {"hexists", ExpectedReply::Integer},
+                          {"hincrby", ExpectedReply::Integer},
+                          {"hlen", ExpectedReply::Integer},
+                          {"hset", ExpectedReply::Integer},
+                          {"hsetnx", ExpectedReply::Integer},
+                          {"incr", ExpectedReply::Integer},
+                          {"incrby", ExpectedReply::Integer},
+                          {"llen", ExpectedReply::Integer},
+                          {"lpush", ExpectedReply::Integer},
+                          {"persist", ExpectedReply::Integer},
+                          {"pexpire", ExpectedReply::Integer},
+                          {"pexpireat", ExpectedReply::Integer},
+                          {"pttl", ExpectedReply::Integer},
+                          {"publish", ExpectedReply::Integer},
+                          {"rpush", ExpectedReply::Integer},
+                          {"sadd", ExpectedReply::Integer},
+                          {"scard", ExpectedReply::Integer},
+                          {"setnx", ExpectedReply::Integer},
+                          {"sismember", ExpectedReply::Integer},
+                          {"spublish", ExpectedReply::Integer},
+                          {"srem", ExpectedReply::Integer},
+                          {"strlen", ExpectedReply::Integer},
+                          {"touch", ExpectedReply::Integer},
+                          {"ttl", ExpectedReply::Integer},
+                          {"unlink", ExpectedReply::Integer},
+                          {"zcard", ExpectedReply::Integer},
+                          {"get", ExpectedReply::BulkStringOrNull},
+                          {"getdel", ExpectedReply::BulkStringOrNull},
+                          {"getset", ExpectedReply::BulkStringOrNull},
+                          {"hget", ExpectedReply::BulkStringOrNull},
+                          {"lindex", ExpectedReply::BulkStringOrNull},
+                          {"hgetall", ExpectedReply::Array},
+                          {"hkeys", ExpectedReply::Array},
+                          {"hmget", ExpectedReply::Array},
+                          {"hvals", ExpectedReply::Array},
+                          {"lrange", ExpectedReply::Array},
+                          {"mget", ExpectedReply::Array},
+                          {"smembers", ExpectedReply::Array}});
+}
+
+ClientImpl::ExpectedReply ClientImpl::expectedReplyFor(const RespValue& request) const {
+  // Inside MULTI the server answers every command with +QUEUED.
+  if (is_transaction_client_) {
+    return ExpectedReply::Unchecked;
+  }
+  const RespValue* command = nullptr;
+  if (request.type() == RespType::Array && !request.asArray().empty()) {
+    command = &request.asArray().front();
+  } else if (request.type() == RespType::CompositeArray) {
+    command = request.asCompositeArray().command();
+  }
+  if (command == nullptr ||
+      (command->type() != RespType::BulkString && command->type() != RespType::SimpleString)) {
+    return ExpectedReply::Unchecked;
+  }
+  const auto it = expectedReplies().find(absl::AsciiStrToLower(command->asString()));
+  return it == expectedReplies().end() ? ExpectedReply::Unchecked : it->second;
+}
+
+bool ClientImpl::replyMatches(ExpectedReply expected_reply, RespType reply_type) {
+  if (reply_type == RespType::Error) {
+    return true;
+  }
+  switch (expected_reply) {
+  case ExpectedReply::Unchecked:
+    return true;
+  case ExpectedReply::Integer:
+    return reply_type == RespType::Integer;
+  case ExpectedReply::BulkStringOrNull:
+    return reply_type == RespType::BulkString || reply_type == RespType::Null;
+  case ExpectedReply::Array:
+    return reply_type == RespType::Array;
+  }
+  PANIC_DUE_TO_CORRUPT_ENUM;
 }
 
 void ClientImpl::onData(Buffer::Instance& data) {
@@ -317,6 +406,22 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
     return;
   }
   PendingRequest& request = pending_requests_.front();
+
+  // RESP replies carry no request id, so one lost or surplus reply shifts every later reply onto
+  // the wrong request (envoyproxy/envoy#48205). A wrong reply type exposes the shift; fail, not
+  // deliver.
+  if (!replyMatches(request.expected_reply_, value->type())) {
+    ENVOY_LOG_EVERY_POW_2(warn,
+                          "redis: closing upstream connection to {}: reply type does not match "
+                          "the pending request",
+                          host_->observabilityName());
+    putOutlierEvent(Upstream::Outlier::Result::ExtOriginRequestFailed);
+    host_->cluster().trafficStats()->upstream_cx_protocol_error_.inc();
+    host_->stats().rq_error_.inc();
+    connection_->close(Network::ConnectionCloseType::NoFlush);
+    return;
+  }
+
   const bool canceled = request.canceled_;
 
   if (config_->enableCommandStats()) {
@@ -366,8 +471,8 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
 }
 
 ClientImpl::PendingRequest::PendingRequest(ClientImpl& parent, ClientCallbacks& callbacks,
-                                           Stats::StatName command)
-    : parent_(parent), callbacks_(callbacks), command_{command},
+                                           Stats::StatName command, ExpectedReply expected_reply)
+    : parent_(parent), callbacks_(callbacks), command_{command}, expected_reply_(expected_reply),
       aggregate_request_timer_(parent_.redis_command_stats_->createAggregateTimer(
           parent_.scope_, parent_.time_source_)) {
   if (parent_.config_->enableCommandStats()) {
