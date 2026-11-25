@@ -443,7 +443,7 @@ void ClientImpl::onRespValue(RespValuePtr&& value) {
           "envoy.reloadable_features.redis_close_on_reply_type_mismatch")) {
     ENVOY_LOG_PERIODIC(warn, std::chrono::seconds(1),
                        "redis: closing upstream connection to {}: {} expects reply type {}, got {}",
-                       host_->observabilityName(), request.reply_check_.command_,
+                       host_->address()->asString(), request.reply_check_.command_,
                        expectedReplyName(request.reply_check_.expected_),
                        respTypeName(value->type()));
     onProtocolError();
